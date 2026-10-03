@@ -1,0 +1,3501 @@
+--[[
+    ╔════════════════════════════════════════════════════════════════╗
+    ║                     Unique HUB - Auto Fishing                  ║
+    ║               Premium Edition with Key System & HWID Lock      ║
+    ║                                                                ║
+    ║   Game: WarZ / BloxZ (PlaceId: 135187059974536)                ║
+    ║                                                                ║
+    ║   Features:                                                    ║
+    ║   1. Keys System (ตรวจสอบคีย์ผ่าน GitHub Raw / GitHub API)     ║
+    ║   2. HWID Lock (1 คีย์ใช้งานได้แค่ 1 เครื่อง ป้องกันส่งต่อ)      ║
+    ║   3. GitHub Auto-Commit (อัปเดตล็อค HWID ขึ้น GitHub อัตโนมัติ) ║
+    ║   4. Auto Login / Remember Key (บันทึกคีย์ไม่ต้องพิมพ์ซ้ำ)     ║
+    ║   5. Copy HWID Button (ปุ่มคัดลอก HWID สำหรับส่งให้แอดมิน)     ║
+    ║   6. Auto Cast (เหวี่ยงเบ็ดอัตโนมัติ)                           ║
+    ║   7. Auto Detect Bite (ตรวจจับปลากินเหยื่อทันที)                ║
+    ║   8. Perfect Auto Reel (ตวัดเบ็ดตรงกลางแถบเขียว 100%)           ║
+    ║   9. Rod & Bait Selector (เลือกเบ็ดและเหยื่อแบบเรียบง่าย)      ║
+    ║   10. Auto Equip Rod (สลับถือเบ็ดให้อัตโนมัติ)                   ║
+    ║   11. Keybind [X] ย่อ/ขยายหน้าต่าง UI                          ║
+    ╚════════════════════════════════════════════════════════════════╝
+--]]
+
+local _initSuccess, _initErr = pcall(function()
+
+-- ป้องกันการรันซ้ำ ล้าง instance เก่าออกก่อน
+if _G.UniqueFishingCleanup then
+    pcall(_G.UniqueFishingCleanup)
+end
+
+-- ══════════════════ [ CONFIGURATION: GITHUB KEY SYSTEM ] ══════════════════
+-- 1. ลิงก์ไฟล์ keys.txt บน GitHub
+local GITHUB_KEYS_URL = "https://raw.githubusercontent.com/Un1queHUB/Auto-Fishing/refs/heads/main/keys.txt"
+
+-- 2. ข้อมูล Repo สำหรับระบบ Auto-Commit (อัปเดตไฟล์บน GitHub อัตโนมัติ)
+local GITHUB_OWNER = "SilasTH2449"
+local GITHUB_REPO  = "Auto-Fishing"
+local GITHUB_PATH  = "keys.txt"
+
+--[[
+    [ วิธีทำให้ GitHub อัปเดตอัตโนมัติ 100% ]
+    1. ไปที่ https://github.com/settings/tokens?type=beta (Fine-grained tokens)
+    2. ตั้งชื่อ เช่น "AutoFishingKey" เลือก Repository: "Auto-Fishing"
+    3. หัวข้อ Permissions -> Repository permissions -> Contents: เลือก "Read and write"
+    4. กด Generate แล้วนำ Token (เช่น github_pat_xxxx) มาวางใน GITHUB_TOKEN ด้านล่างนี้
+    * หากไม่ใส่ Token ("") แอดมินสามารถเข้าไปใส่ :HWID ต่อท้ายคีย์ใน GitHub เองได้
+--]]
+local GITHUB_TOKEN = ""
+
+-- หากเป็น true: คีย์บน GitHub จะต้องมี :HWID เท่านั้นถึงจะใช้งานได้ (ป้องกันคนเอาคีย์ที่ยังไม่ผูกไปแชร์กัน)
+-- หากเป็น false: อนุญาตให้คีย์ที่ยังไม่มี :HWID ถูกผูกกับเครื่องแรกที่นำไปใช้
+local STRICT_HWID_ONLY = true
+
+-- ชื่อไฟล์เซฟคีย์ในเครื่อง
+local SAVE_FILE_NAME = "UniqueHub_FishingKey.json"
+
+-- ══════════════════ SERVICES ══════════════════
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local TweenService        = game:GetService("TweenService")
+local UserInputService    = game:GetService("UserInputService")
+local Workspace           = game:GetService("Workspace")
+local CoreGui             = game:GetService("CoreGui")
+local StarterGui          = game:GetService("StarterGui")
+local HttpService         = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    LocalPlayer = Players.LocalPlayer
+end
+
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 5)
+
+-- ══════════════════ UTILITY FUNCTIONS ══════════════════
+local function Create(cls, props)
+    local o = Instance.new(cls)
+    for k, v in pairs(props or {}) do
+        if k ~= "Parent" then o[k] = v end
+    end
+    if props and props.Parent then o.Parent = props.Parent end
+    return o
+end
+
+local function RoundCorner(parent, radius)
+    return Create("UICorner", {CornerRadius = UDim.new(0, radius or 8), Parent = parent})
+end
+
+local function AddStroke(parent, color, thickness)
+    return Create("UIStroke", {
+        Color = color or Color3.fromRGB(50, 50, 58),
+        Thickness = thickness or 1,
+        Parent = parent
+    })
+end
+
+local function Tween(obj, props, dur, style, dir)
+    local tw = TweenService:Create(obj,
+        TweenInfo.new(dur or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+        props)
+    tw:Play()
+    return tw
+end
+
+-- ══════════════════ THEME / COLORS ══════════════════
+local Theme = {
+    BG          = Color3.fromRGB(18, 18, 22),
+    Header      = Color3.fromRGB(24, 24, 30),
+    Card        = Color3.fromRGB(26, 26, 33),
+    CardHover   = Color3.fromRGB(34, 34, 42),
+    Border      = Color3.fromRGB(48, 48, 58),
+    BorderLight = Color3.fromRGB(70, 70, 84),
+    Text        = Color3.fromRGB(245, 245, 248),
+    TextMuted   = Color3.fromRGB(150, 150, 162),
+    Green       = Color3.fromRGB(46, 204, 113),
+    GreenHover  = Color3.fromRGB(39, 174, 96),
+    Red         = Color3.fromRGB(231, 76, 60),
+    RedHover    = Color3.fromRGB(192, 57, 43),
+    Yellow      = Color3.fromRGB(241, 196, 15),
+    Accent      = Color3.fromRGB(230, 230, 235),
+    White       = Color3.fromRGB(255, 255, 255),
+}
+
+-- ══════════════════ BASE64 ENCODER & DECODER ══════════════════
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local b64lookup = {}
+for i = 1, #b64chars do
+    b64lookup[b64chars:sub(i, i)] = i - 1
+end
+
+local function base64Encode(str)
+    local bytes = {str:byte(1, #str)}
+    local result = {}
+    local pad = 3 - (#bytes % 3)
+    if pad == 3 then pad = 0 end
+    for i = 1, pad do
+        table.insert(bytes, 0)
+    end
+    for i = 1, #bytes, 3 do
+        local b1, b2, b3 = bytes[i], bytes[i+1], bytes[i+2]
+        local n = (b1 * 65536) + (b2 * 256) + b3
+        local c1 = math.floor(n / 262144) % 64 + 1
+        local c2 = math.floor(n / 4096) % 64 + 1
+        local c3 = math.floor(n / 64) % 64 + 1
+        local c4 = n % 64 + 1
+        table.insert(result, b64chars:sub(c1, c1))
+        table.insert(result, b64chars:sub(c2, c2))
+        table.insert(result, b64chars:sub(c3, c3))
+        table.insert(result, b64chars:sub(c4, c4))
+    end
+    local res = table.concat(result)
+    if pad > 0 then
+        res = res:sub(1, #res - pad) .. string.rep("=", pad)
+    end
+    return res
+end
+
+local function base64Decode(data)
+    data = string.gsub(data, "[^A-Za-z0-9+/=]", "")
+    local result = {}
+    local len = #data
+    local i = 1
+    while i <= len do
+        local c1 = b64lookup[data:sub(i, i)] or 0
+        local c2 = b64lookup[data:sub(i+1, i+1)] or 0
+        local c3 = b64lookup[data:sub(i+2, i+2)] or 0
+        local c4 = b64lookup[data:sub(i+3, i+3)] or 0
+
+        local pad = 0
+        if data:sub(i+2, i+2) == "=" then pad = 2
+        elseif data:sub(i+3, i+3) == "=" then pad = 1 end
+
+        local n = (c1 * 262144) + (c2 * 4096) + (c3 * 64) + c4
+        local b1 = math.floor(n / 65536) % 256
+        local b2 = math.floor(n / 256) % 256
+        local b3 = n % 256
+
+        table.insert(result, string.char(b1))
+        if pad < 2 then table.insert(result, string.char(b2)) end
+        if pad < 1 then table.insert(result, string.char(b3)) end
+
+        i = i + 4
+    end
+    return table.concat(result)
+end
+
+-- ══════════════════ HWID & FILE UTILITIES ══════════════════
+local function getHWID()
+    local hwid = nil
+    if gethwid then
+        pcall(function() hwid = gethwid() end)
+    elseif get_hwid then
+        pcall(function() hwid = get_hwid() end)
+    end
+    if not hwid or hwid == "" then
+        pcall(function()
+            hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+        end)
+    end
+    if not hwid or hwid == "" then
+        pcall(function()
+            hwid = tostring(LocalPlayer.UserId)
+        end)
+    end
+    return tostring(hwid or "UNKNOWN-HWID")
+end
+
+local function fetchUrl(url)
+    local result = nil
+    local success = pcall(function()
+        result = game:HttpGet(url)
+    end)
+    if success and result and result ~= "" then
+        return result
+    end
+
+    local req = (syn and syn.request) or request or http_request or (http and http.request)
+    if req then
+        local s, r = pcall(function()
+            return req({Url = url, Method = "GET"})
+        end)
+        if s and r and r.Body and r.Body ~= "" then
+            return r.Body
+        end
+    end
+    return nil
+end
+
+local function copyToClipboard(text)
+    if setclipboard then
+        pcall(setclipboard, text)
+    elseif toclipboard then
+        pcall(toclipboard, text)
+    elseif Clipboard and Clipboard.set then
+        pcall(Clipboard.set, text)
+    end
+end
+
+local function saveKeyLocal(key, hwid)
+    if writefile then
+        pcall(function()
+            writefile(SAVE_FILE_NAME, HttpService:JSONEncode({
+                key = key,
+                hwid = hwid,
+                savedAt = os.time()
+            }))
+        end)
+    end
+end
+
+local function readKeyLocal()
+    if isfile and readfile then
+        local ok, res = pcall(function()
+            if isfile(SAVE_FILE_NAME) then
+                return HttpService:JSONDecode(readfile(SAVE_FILE_NAME))
+            end
+        end)
+        if ok and res and typeof(res) == "table" then
+            return res
+        end
+    end
+    return nil
+end
+
+local function deleteKeyLocal()
+    if delfile and isfile then
+        pcall(function()
+            if isfile(SAVE_FILE_NAME) then
+                delfile(SAVE_FILE_NAME)
+            end
+        end)
+    elseif writefile then
+        pcall(function()
+            writefile(SAVE_FILE_NAME, "")
+        end)
+    end
+end
+
+-- ══════════════════ KEY & HWID LOCK VERIFICATION ENGINE ══════════════════
+local function verifyAndLockKeyOnline(inputKey)
+    inputKey = string.gsub(inputKey or "", "^%s*(.-)%s*$", "%1")
+    if inputKey == "" then
+        return false, "กรุณากรอกคีย์ก่อนกดยืนยัน"
+    end
+
+    local myHwid = getHWID()
+    local fileContent = ""
+    local fileSha = nil
+
+    -- 1. พยายามดึงผ่าน GitHub REST API ถ้ามี GITHUB_TOKEN (เพื่อให้ได้ SHA สำหรับเขียนทับ)
+    local hasToken = (typeof(GITHUB_TOKEN) == "string" and GITHUB_TOKEN ~= "")
+    local req = (syn and syn.request) or request or http_request or (http and http.request)
+
+    if hasToken and req then
+        local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, GITHUB_PATH)
+        local ok, resp = pcall(function()
+            return req({
+                Url = apiUrl,
+                Method = "GET",
+                Headers = {
+                    ["Authorization"] = "Bearer " .. GITHUB_TOKEN,
+                    ["Accept"] = "application/vnd.github.v3+json",
+                    ["User-Agent"] = "UniqueHub-KeySystem"
+                }
+            })
+        end)
+        if ok and resp and resp.Body then
+            local jsonOk, data = pcall(function() return HttpService:JSONDecode(resp.Body) end)
+            if jsonOk and data and data.sha and data.content then
+                fileSha = data.sha
+                fileContent = base64Decode(data.content)
+            end
+        end
+    end
+
+    -- 2. ถ้าไม่ได้ใช้ Token หรือดึง API ไม่สำเร็จ ให้ดึงผ่าน Raw URL (พร้อม timestamp กันแคช)
+    if fileContent == "" then
+        local rawUrl = GITHUB_KEYS_URL .. "?t=" .. tostring(os.time())
+        fileContent = fetchUrl(rawUrl) or fetchUrl(GITHUB_KEYS_URL) or ""
+    end
+
+    if fileContent == "" then
+        return false, "ไม่สามารถเชื่อมต่อ GitHub ได้ กรุณาตรวจสอบอินเทอร์เน็ต"
+    end
+
+    -- 3. แยกบรรทัดและวิเคราะห์คีย์
+    local lines = {}
+    local keyFound = false
+    local keyNeedsBind = false
+    local targetLineIndex = -1
+
+    for line in string.gmatch(fileContent, "[^\r\n]+") do
+        table.insert(lines, line)
+    end
+
+    for idx, line in ipairs(lines) do
+        local trimmed = string.gsub(line, "^%s*(.-)%s*$", "%1")
+        if trimmed ~= "" and not string.find(trimmed, "^#") and not string.find(trimmed, "^%-%-") then
+            local colonIdx = string.find(trimmed, ":")
+            if colonIdx then
+                -- คีย์นี้ถูกผูก HWID ไว้แล้วบน GitHub (KEY:HWID)
+                local k = string.gsub(string.sub(trimmed, 1, colonIdx - 1), "^%s*(.-)%s*$", "%1")
+                local h = string.gsub(string.sub(trimmed, colonIdx + 1), "^%s*(.-)%s*$", "%1")
+                if k == inputKey then
+                    keyFound = true
+                    if h == myHwid then
+                        -- HWID ตรงกับเครื่องนี้ 100%!
+                        saveKeyLocal(inputKey, myHwid)
+                        return true, "คีย์ถูกต้อง! ยินดีต้อนรับเข้าสู่ระบบ"
+                    else
+                        -- มีเครื่องอื่นผูกคีย์นี้ไปแล้ว และ HWID ไม่ตรง! บล็อกทันที
+                        return false, "คีย์นี้ถูกใช้งานและล็อคกับเครื่องอื่นไปแล้ว! (HWID Locked)"
+                    end
+                end
+            else
+                -- คีย์ยังไม่ได้ผูก HWID (เป็นคีย์ว่าง)
+                if trimmed == inputKey then
+                    keyFound = true
+                    keyNeedsBind = true
+                    targetLineIndex = idx
+                end
+            end
+        end
+    end
+
+    if not keyFound then
+        return false, "คีย์ไม่ถูกต้อง หรือไม่มีอยู่ในระบบ"
+    end
+
+    -- 4. จัดการคีย์ที่ยังไม่ได้ผูก HWID (Unbound Key)
+    if keyNeedsBind then
+        if STRICT_HWID_ONLY and not hasToken then
+            return false, "คีย์นี้ยังไม่ได้รับการผูกกับเครื่องของคุณ กรุณาส่ง HWID ให้แอดมินเปิดใช้งาน"
+        end
+
+        -- ถ้ามี GITHUB_TOKEN: อัปเดตผูก HWID ขึ้น GitHub ทันทีแบบ Real-Time!
+        if hasToken and fileSha and req then
+            lines[targetLineIndex] = inputKey .. ":" .. myHwid
+            local newContent = table.concat(lines, "\n")
+            local newBase64 = base64Encode(newContent)
+
+            local putUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, GITHUB_PATH)
+            local putOk, putResp = pcall(function()
+                return req({
+                    Url = putUrl,
+                    Method = "PUT",
+                    Headers = {
+                        ["Authorization"] = "Bearer " .. GITHUB_TOKEN,
+                        ["Accept"] = "application/vnd.github.v3+json",
+                        ["User-Agent"] = "UniqueHub-KeySystem",
+                        ["Content-Type"] = "application/json"
+                    },
+                    Body = HttpService:JSONEncode({
+                        message = "Lock key " .. inputKey .. " to HWID " .. myHwid,
+                        content = newBase64,
+                        sha = fileSha
+                    })
+                })
+            end)
+
+            if putOk and putResp and (putResp.StatusCode == 200 or putResp.StatusCode == 201) then
+                saveKeyLocal(inputKey, myHwid)
+                return true, "คีย์ถูกต้อง! และได้บันทึกล็อคเครื่องขึ้น GitHub เรียบร้อยแล้ว"
+            else
+                warn("[Unique HUB] เกิดข้อผิดพลาดในการ Commit ขึ้น GitHub:", putResp and putResp.Body)
+            end
+        end
+
+        -- กรณีไม่มี Token ให้ผูกกับ Local Storage และแจ้งเตือน
+        saveKeyLocal(inputKey, myHwid)
+        return true, "คีย์ถูกต้อง! (ใส่ GITHUB_TOKEN เพื่อให้ล็อคขึ้น GitHub อัตโนมัติ)"
+    end
+
+    return false, "เกิดข้อผิดพลาดในการตรวจสอบคีย์"
+end
+
+-- ══════════════════ ROOT GUI PARENT ══════════════════
+pcall(function()
+    local old = CoreGui:FindFirstChild("UniqueFishing_GUI")
+    if old then old:Destroy() end
+    local oldKey = CoreGui:FindFirstChild("UniqueKey_GUI")
+    if oldKey then oldKey:Destroy() end
+end)
+if PlayerGui then
+    pcall(function()
+        local old = PlayerGui:FindFirstChild("UniqueFishing_GUI")
+        if old then old:Destroy() end
+        local oldKey = PlayerGui:FindFirstChild("UniqueKey_GUI")
+        if oldKey then oldKey:Destroy() end
+    end)
+end
+
+local GuiParent = nil
+pcall(function()
+    if CoreGui then GuiParent = CoreGui end
+end)
+if not GuiParent then GuiParent = PlayerGui end
+
+local launchAutoFishing = nil
+local openKeySystemUI   = nil
+
+-- ══════════════════ GAME MODULES & REMOTES ══════════════════
+local Config = nil
+local Inventory = nil
+local FishingCompatibility = nil
+
+pcall(function()
+    local Shared = ReplicatedStorage:FindFirstChild("Shared")
+    if Shared then
+        if Shared:FindFirstChild("Config") then Config = require(Shared.Config) end
+        if Shared:FindFirstChild("Inventory") then Inventory = require(Shared.Inventory) end
+        if Shared:FindFirstChild("FishingCompatibility") then FishingCompatibility = require(Shared.FishingCompatibility) end
+    end
+end)
+
+local FishingRemotes = {
+    FishingStart        = nil,
+    FishingReel         = nil,
+    FishingCancel       = nil,
+    FishingState        = nil,
+    SwitchWeaponRequest = nil,
+}
+
+local function findRemote(name)
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes and remotes:FindFirstChild(name) then
+        return remotes[name]
+    end
+    return ReplicatedStorage:FindFirstChild(name, true)
+end
+
+FishingRemotes.FishingStart        = findRemote("FishingStart")
+FishingRemotes.FishingReel         = findRemote("FishingReel")
+FishingRemotes.FishingCancel       = findRemote("FishingCancel")
+FishingRemotes.FishingState        = findRemote("FishingState")
+FishingRemotes.SwitchWeaponRequest = findRemote("SwitchWeaponRequest")
+FishingRemotes.StashToBag          = findRemote("StashToBag")
+FishingRemotes.BagToStash          = findRemote("BagToStash")
+FishingRemotes.BagAllToStash       = findRemote("BagAllToStash")
+FishingRemotes.ProfileUpdated      = findRemote("ProfileUpdated")
+FishingRemotes.MatchHudUpdated     = findRemote("MatchHudUpdated")
+FishingRemotes.StashAccess         = findRemote("StashAccess")
+
+-- ══════════════════ PROFILE & WAREHOUSE CACHE ══════════════════
+local StateDeltaModule = nil
+pcall(function()
+    local sharedFolder = game:GetService("ReplicatedStorage"):WaitForChild("Shared", 3)
+    if sharedFolder and sharedFolder:FindFirstChild("StateDelta") then
+        StateDeltaModule = require(sharedFolder.StateDelta)
+    end
+end)
+
+local cachedProfile = nil
+local deltaState = {}
+
+if FishingRemotes.ProfileUpdated then
+    pcall(function()
+        FishingRemotes.ProfileUpdated.OnClientEvent:Connect(function(data)
+            if typeof(data) == "table" then
+                if not cachedProfile then cachedProfile = {} end
+                if data.full then
+                    cachedProfile = data.full
+                elseif data.changed then
+                    for k, v in pairs(data.changed) do
+                        cachedProfile[k] = v
+                    end
+                elseif data.Warehouse or data.Backpack then
+                    for k, v in pairs(data) do
+                        cachedProfile[k] = v
+                    end
+                end
+
+                if StateDeltaModule and StateDeltaModule.Decode then
+                    pcall(function()
+                        local decoded = StateDeltaModule.Decode(deltaState, data)
+                        if typeof(decoded) == "table" then
+                            cachedProfile = decoded
+                        end
+                    end)
+                end
+            end
+        end)
+    end)
+end
+
+local function getLatestProfile()
+    -- 1. ตรวจสอบจาก cachedProfile
+    if cachedProfile and (cachedProfile.Warehouse or cachedProfile.Backpack) then
+        return cachedProfile
+    end
+
+    -- 2. ดึงผ่าน debug.getupvalues จาก Client.world.Fishing (เชื่อมตรงกับ u161.profile ของตัวเกม)
+    pcall(function()
+        local getupv = debug.getupvalues or getupvalues
+        if getupv then
+            local pScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+            local clientMod = pScripts and pScripts:FindFirstChild("Client")
+            local fishingScript = clientMod and clientMod:FindFirstChild("world") and clientMod.world:FindFirstChild("Fishing")
+            if fishingScript then
+                local fishingMod = require(fishingScript)
+                local targets = {fishingMod.Build, fishingMod.Press, fishingMod.Cancel, fishingMod.IsActive}
+                for _, fn in ipairs(targets) do
+                    if typeof(fn) == "function" then
+                        for _, upv in pairs(getupv(fn)) do
+                            if typeof(upv) == "function" then
+                                local ok, res = pcall(upv)
+                                if ok and typeof(res) == "table" then
+                                    if res.profile and (res.profile.Warehouse or res.profile.Backpack) then
+                                        cachedProfile = res.profile
+                                        return
+                                    elseif res.Warehouse and res.Backpack then
+                                        cachedProfile = res
+                                        return
+                                    end
+                                end
+                            elseif typeof(upv) == "table" then
+                                if upv.profile and (upv.profile.Warehouse or upv.profile.Backpack) then
+                                    cachedProfile = upv.profile
+                                    return
+                                elseif upv.Warehouse and upv.Backpack then
+                                    cachedProfile = upv
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    if cachedProfile and (cachedProfile.Warehouse or cachedProfile.Backpack) then
+        return cachedProfile
+    end
+
+    -- 3. ตรวจสอบผ่าน getgc(true)
+    if getgc then
+        local ok, res = pcall(function()
+            for _, v in ipairs(getgc(true)) do
+                if typeof(v) == "table" then
+                    local prof = rawget(v, "profile")
+                    if typeof(prof) == "table" and (rawget(prof, "Warehouse") or rawget(prof, "Backpack")) then
+                        return prof
+                    end
+                    if rawget(v, "Warehouse") and rawget(v, "Backpack") then
+                        return v
+                    end
+                end
+            end
+        end)
+        if ok and res then
+            cachedProfile = res
+            return res
+        end
+    end
+
+    -- 4. ตรวจสอบผ่าน debug.getregistry() / getreg()
+    pcall(function()
+        local getreg_fn = debug.getregistry or getreg
+        if getreg_fn then
+            for _, v in pairs(getreg_fn()) do
+                if typeof(v) == "table" then
+                    local prof = rawget(v, "profile")
+                    if typeof(prof) == "table" and (rawget(prof, "Warehouse") or rawget(prof, "Backpack")) then
+                        cachedProfile = prof
+                        return
+                    end
+                    if rawget(v, "Warehouse") and rawget(v, "Backpack") then
+                        cachedProfile = v
+                        return
+                    end
+                end
+            end
+        end
+    end)
+
+    return cachedProfile
+end
+
+-- ══════════════════ FISHING STATE & SETTINGS ══════════════════
+local Settings = {
+    AutoFishEnabled  = false,
+    SelectedRodSlot  = "auto",
+    SelectedBaitSlot = "auto",
+    CastDelay        = 6.0,
+    AutoEquipRod     = true,
+    PerfectReel      = true,
+    UseNoclip        = true,
+    AutoDeposit      = true,
+    AutoRestock      = false,
+    RestockBaitName  = "Chubby",
+    RestockAmount    = "10",
+}
+
+local Stats = {
+    Catches   = 0,
+    Misses    = 0,
+    LastCatch = "-",
+    Status    = "พร้อมใช้งาน (Idle)",
+}
+
+local ActiveState = {
+    CastId       = nil,
+    Phase        = "idle",
+    BiteAt       = 0,
+    Speed        = 1,
+    ZoneCenter   = 0.5,
+    ZoneWidth    = 0.25,
+    Deadline     = 0,
+    IsReeling    = false,
+    CastTime     = 0,
+}
+
+local DetectedRods  = {}
+local DetectedBaits = {}
+
+local function markerAt(serverTime, biteAt, speed)
+    local v = (serverTime - biteAt) * speed % 2
+    if v < 0 then v = v + 2 end
+    if v < 1 then return v end
+    return 2 - v
+end
+
+local function scanInventory()
+    table.clear(DetectedRods)
+    table.clear(DetectedBaits)
+
+    local activeSlot = tonumber(LocalPlayer:GetAttribute("CSGO_ActiveSlot")) or 1
+    local activeCatId = tostring(LocalPlayer:GetAttribute("CSGO_CatalogId") or "")
+    if activeCatId ~= "" and (string.find(activeCatId, "Rod") or string.find(activeCatId, "Fishing")) then
+        table.insert(DetectedRods, {
+            slot = activeSlot,
+            id = activeCatId,
+            name = (Config and Config.ShopItem and Config.ShopItem(activeCatId) and Config.ShopItem(activeCatId).Name) or activeCatId,
+            equipped = true,
+        })
+    end
+
+    pcall(function()
+        if PlayerGui then
+            local csgoUi = PlayerGui:FindFirstChild("CSGO_UI")
+            if csgoUi then
+                local hud = csgoUi:FindFirstChild("Hud")
+                local slotCards = hud and hud:FindFirstChild("SlotCards")
+                if slotCards then
+                    for i = 1, 6 do
+                        local slotFrame = slotCards:FindFirstChild("Slot" .. tostring(i))
+                        if slotFrame then
+                            local nameLab = slotFrame:FindFirstChild("Name")
+                            local qtyLab = slotFrame:FindFirstChild("Qty")
+                            local itemName = (nameLab and nameLab.Text) or ""
+                            local itemQtyText = (qtyLab and qtyLab.Text) or ""
+                            
+                            -- สกัดเฉพาะตัวเลข
+                            local qNum = 0
+                            local matched = string.match(itemQtyText, "%d+")
+                            if matched then 
+                                qNum = tonumber(matched) or 0 
+                            else
+                                local lowerName = string.lower(itemName)
+                                if string.find(lowerName, "rod") or string.find(lowerName, "เบ็ด") then
+                                    qNum = 1
+                                else
+                                    qNum = 0
+                                end
+                            end
+
+                            if itemName ~= "" and qNum > 0 then
+                                local lowerName = string.lower(itemName)
+                                if string.find(lowerName, "rod") or string.find(lowerName, "เบ็ด") then
+                                    local found = false
+                                    for _, r in ipairs(DetectedRods) do
+                                        if r.slot == i then found = true break end
+                                    end
+                                    if not found then
+                                        table.insert(DetectedRods, {
+                                            slot = i,
+                                            id = "Slot" .. tostring(i),
+                                            name = itemName,
+                                            qty = qNum,
+                                        })
+                                    end
+                                elseif string.find(lowerName, "bait") or string.find(lowerName, "เหยื่อ") or string.find(lowerName, "worm") or string.find(lowerName, "chubby") then
+                                    local found = false
+                                    for _, b in ipairs(DetectedBaits) do
+                                        if b.slot == i then found = true break end
+                                    end
+                                    if not found then
+                                        table.insert(DetectedBaits, {
+                                            slot = i,
+                                            id = "Slot" .. tostring(i),
+                                            name = itemName,
+                                            qty = qNum,
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ค้นหาเหยื่อและเบ็ดจาก Backpack ใน Profile ด้วย
+    pcall(function()
+        local prof = getLatestProfile()
+        if prof and prof.Backpack and prof.Backpack.Slots then
+            for slotIdx, slotData in pairs(prof.Backpack.Slots) do
+                if typeof(slotData) == "table" and slotData.ItemId then
+                    local q = tonumber(slotData.Qty) or 0
+                    local id = tostring(slotData.ItemId)
+                    local idLower = string.lower(id)
+                    if q > 0 and (id == "BaitChubby" or id == "BaitSpider" or string.find(idLower, "bait") or string.find(idLower, "chubby") or string.find(idLower, "spider") or string.find(idLower, "เหยื่อ")) then
+                        local found = false
+                        for _, b in ipairs(DetectedBaits) do
+                            if b.slot == slotIdx then found = true break end
+                        end
+                        if not found then
+                            local shopItem = Config and Config.ShopItem and Config.ShopItem(id)
+                            table.insert(DetectedBaits, {
+                                slot = slotIdx,
+                                id = id,
+                                name = (shopItem and shopItem.Name) or id,
+                                qty = q,
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function getTargetRodSlot()
+    if Settings.SelectedRodSlot ~= "auto" then
+        return tonumber(Settings.SelectedRodSlot) or 1
+    end
+    local held = tonumber(LocalPlayer:GetAttribute("CSGO_ActiveSlot"))
+    if held and held >= 1 and held <= 6 then
+        for _, r in ipairs(DetectedRods) do
+            if r.slot == held then return held end
+        end
+    end
+    if #DetectedRods > 0 then
+        return DetectedRods[1].slot
+    end
+    return 1
+end
+
+local function getTargetBaitSlot()
+    scanInventory()
+    local pref = string.lower(tostring(Settings.SelectedBaitSlot or "auto"))
+
+    -- 1. ถ้าเลือกแบบระบุชนิด
+    if pref == "chubby" then
+        for _, b in ipairs(DetectedBaits) do
+            if b.id == "BaitChubby" or string.find(string.lower(b.id), "chubby") then
+                return b.slot
+            end
+        end
+    elseif pref == "spider" then
+        for _, b in ipairs(DetectedBaits) do
+            if b.id == "BaitSpider" or string.find(string.lower(b.id), "spider") or string.find(b.name, "ใยทมิฬ") then
+                return b.slot
+            end
+        end
+    elseif tonumber(Settings.SelectedBaitSlot) then
+        return tonumber(Settings.SelectedBaitSlot)
+    end
+
+    -- 2. ถ้ามี DetectedBaits ให้เลือกช่องแรกที่มี
+    if #DetectedBaits > 0 then
+        return DetectedBaits[1].slot
+    end
+
+    -- 3. ตรวจสอบตรงจาก Backpack Slots ใน Profile
+    local prof = getLatestProfile()
+    if prof and prof.Backpack and prof.Backpack.Slots then
+        for slotIdx, slotData in pairs(prof.Backpack.Slots) do
+            if typeof(slotData) == "table" and slotData.ItemId then
+                local q = tonumber(slotData.Qty) or 0
+                local id = tostring(slotData.ItemId)
+                local idLower = string.lower(id)
+                if q > 0 and (id == "BaitChubby" or id == "BaitSpider" or string.find(idLower, "bait") or string.find(idLower, "chubby") or string.find(idLower, "spider")) then
+                    return tonumber(slotIdx) or slotIdx
+                end
+            end
+        end
+    end
+
+    return 4
+end
+
+local function getCastTargetPoint()
+    local cam = Workspace.CurrentCamera
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    if cam then
+        local camPos = cam.CFrame.Position
+        local look = cam.CFrame.LookVector
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = {char}
+        rayParams.IgnoreWater = true
+        local hit = Workspace:Raycast(camPos, look * 60, rayParams)
+        if hit and (Vector3.new(hit.Position.X - camPos.X, 0, hit.Position.Z - camPos.Z)).Magnitude <= 50 then
+            return hit.Position
+        end
+        return camPos + look * 35
+    elseif hrp then
+        return hrp.Position + hrp.CFrame.LookVector * 28 - Vector3.new(0, 3, 0)
+    end
+    return Vector3.new(0, 0, 0)
+end
+
+-- ══════════════════ KEY SYSTEM GUI (WINDOW) ══════════════════
+openKeySystemUI = function()
+    local KeyScreen = Create("ScreenGui", {
+        Name = "UniqueKey_GUI",
+        ResetOnSpawn = false,
+        DisplayOrder = 2000,
+        Parent = GuiParent,
+    })
+
+    local KeyWindow = Create("Frame", {
+        Name = "KeyWindow",
+        Size = UDim2.new(0, 380, 0, 440),
+        Position = UDim2.new(0.5, -190, 0.5, -220),
+        BackgroundColor3 = Theme.BG,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = KeyScreen,
+    })
+    RoundCorner(KeyWindow, 12)
+    AddStroke(KeyWindow, Theme.Border, 1)
+
+    -- Header
+    local KeyHeader = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 48),
+        BackgroundColor3 = Theme.Header,
+        BorderSizePixel = 0,
+        Parent = KeyWindow,
+    })
+    RoundCorner(KeyHeader, 12)
+    Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 12),
+        Position = UDim2.new(0, 0, 1, -12),
+        BackgroundColor3 = Theme.Header,
+        BorderSizePixel = 0,
+        Parent = KeyHeader,
+    })
+
+    local KeyDot = Create("Frame", {
+        Size = UDim2.new(0, 10, 0, 10),
+        Position = UDim2.new(0, 14, 0.5, -5),
+        BackgroundColor3 = Theme.Yellow,
+        BorderSizePixel = 0,
+        Parent = KeyHeader,
+    })
+    RoundCorner(KeyDot, 5)
+
+    Create("TextLabel", {
+        Text = "Unique HUB",
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextColor3 = Theme.White,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 32, 0, 6),
+        Size = UDim2.new(0, 140, 0, 20),
+        Parent = KeyHeader,
+    })
+
+    Create("TextLabel", {
+        Text = "KEY SYSTEM • 1 KEY PER 1 DEVICE",
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 32, 0, 26),
+        Size = UDim2.new(0, 200, 0, 16),
+        Parent = KeyHeader,
+    })
+
+    local KeyCloseBtn = Create("TextButton", {
+        Text = "✕",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Color3.fromRGB(34, 34, 42),
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(1, -34, 0.5, -14),
+        AutoButtonColor = false,
+        Parent = KeyHeader,
+    })
+    RoundCorner(KeyCloseBtn, 6)
+    KeyCloseBtn.MouseButton1Click:Connect(function()
+        KeyScreen:Destroy()
+    end)
+
+    -- Body Container
+    local KeyBody = Create("Frame", {
+        Size = UDim2.new(1, -28, 1, -62),
+        Position = UDim2.new(0, 14, 0, 56),
+        BackgroundTransparency = 1,
+        Parent = KeyWindow,
+    })
+
+    Create("TextLabel", {
+        Text = "🔐  ระบบยืนยันตัวตน (Key System)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        TextColor3 = Theme.White,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, 4),
+        Size = UDim2.new(1, 0, 0, 20),
+        Parent = KeyBody,
+    })
+
+    Create("TextLabel", {
+        Text = "คีย์จะถูกล็อคติดเครื่อง 1 คีย์ใช้งานได้แค่เครื่องเดียว",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, 24),
+        Size = UDim2.new(1, 0, 0, 16),
+        Parent = KeyBody,
+    })
+
+    -- กล่องใส่คีย์ (TextBox)
+    local KeyInputCard = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 44),
+        Position = UDim2.new(0, 0, 0, 48),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0,
+        Parent = KeyBody,
+    })
+    RoundCorner(KeyInputCard, 8)
+    AddStroke(KeyInputCard, Theme.Border, 1)
+
+    local KeyInput = Create("TextBox", {
+        PlaceholderText = "กรอกคีย์ของคุณที่นี่ (เช่น UNIQUE-KEY-xxxx)",
+        PlaceholderColor3 = Theme.TextMuted,
+        Text = "",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.White,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -20, 1, 0),
+        Position = UDim2.new(0, 10, 0, 0),
+        ClearTextOnFocus = false,
+        Parent = KeyInputCard,
+    })
+
+    -- การ์ดแสดง HWID ของเครื่อง
+    local HwidCard = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 78),
+        Position = UDim2.new(0, 0, 0, 102),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0,
+        Parent = KeyBody,
+    })
+    RoundCorner(HwidCard, 8)
+    AddStroke(HwidCard, Theme.Border, 1)
+
+    Create("TextLabel", {
+        Text = "💻 รหัสเครื่องของคุณ (Hardware ID):",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 8),
+        Size = UDim2.new(1, -24, 0, 16),
+        Parent = HwidCard,
+    })
+
+    local myHwidStr = getHWID()
+    local displayHwid = string.sub(myHwidStr, 1, 24) .. (string.len(myHwidStr) > 24 and "..." or "")
+
+    Create("TextLabel", {
+        Text = displayHwid,
+        Font = Enum.Font.Code,
+        TextSize = 11,
+        TextColor3 = Theme.Accent,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 26),
+        Size = UDim2.new(1, -120, 0, 18),
+        Parent = HwidCard,
+    })
+
+    local CopyHwidBtn = Create("TextButton", {
+        Text = "📋 คัดลอก HWID",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0, 100, 0, 24),
+        Position = UDim2.new(1, -112, 0, 24),
+        AutoButtonColor = false,
+        Parent = HwidCard,
+    })
+    RoundCorner(CopyHwidBtn, 6)
+    CopyHwidBtn.MouseButton1Click:Connect(function()
+        copyToClipboard(myHwidStr)
+        CopyHwidBtn.Text = "✓ คัดลอกแล้ว!"
+        CopyHwidBtn.BackgroundColor3 = Theme.Green
+        task.delay(1.5, function()
+            CopyHwidBtn.Text = "📋 คัดลอก HWID"
+            CopyHwidBtn.BackgroundColor3 = Theme.CardHover
+        end)
+    end)
+
+    Create("TextLabel", {
+        Text = "หากคีย์ติดล็อคเครื่อง ให้ส่ง HWID นี้ให้แอดมินปลดล็อค",
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextColor3 = Color3.fromRGB(120, 120, 130),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 52),
+        Size = UDim2.new(1, -24, 0, 16),
+        Parent = HwidCard,
+    })
+
+    -- ข้อความผลการตรวจสอบ
+    local KeyStatusMsg = Create("TextLabel", {
+        Text = "พร้อมตรวจสอบคีย์",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, 188),
+        Size = UDim2.new(1, 0, 0, 22),
+        Parent = KeyBody,
+    })
+
+    -- ปุ่มยืนยันคีย์ (SUBMIT KEY)
+    local SubmitBtn = Create("TextButton", {
+        Text = "✓  ยืนยันคีย์ (SUBMIT KEY)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.Green,
+        Size = UDim2.new(1, 0, 0, 42),
+        Position = UDim2.new(0, 0, 0, 218),
+        AutoButtonColor = false,
+        Parent = KeyBody,
+    })
+    RoundCorner(SubmitBtn, 8)
+
+    local isChecking = false
+    SubmitBtn.MouseButton1Click:Connect(function()
+        if isChecking then return end
+        local input = KeyInput.Text
+        if input == "" then
+            KeyStatusMsg.Text = "✗ กรุณากรอกคีย์ก่อนกดยืนยัน"
+            KeyStatusMsg.TextColor3 = Theme.Red
+            return
+        end
+
+        isChecking = true
+        SubmitBtn.Text = "⏳ กำลังตรวจสอบและล็อค HWID..."
+        SubmitBtn.BackgroundColor3 = Theme.CardHover
+        KeyStatusMsg.Text = "กำลังติดต่อ GitHub เพื่อยืนยันและล็อคเครื่อง..."
+        KeyStatusMsg.TextColor3 = Theme.Yellow
+        KeyDot.BackgroundColor3 = Theme.Yellow
+
+        task.spawn(function()
+            local success, msg = verifyAndLockKeyOnline(input)
+            isChecking = false
+
+            if success then
+                KeyStatusMsg.Text = "✓ " .. msg
+                KeyStatusMsg.TextColor3 = Theme.Green
+                KeyDot.BackgroundColor3 = Theme.Green
+                SubmitBtn.Text = "✓ สำเร็จ! กำลังเปิดโปรแกรม..."
+                SubmitBtn.BackgroundColor3 = Theme.Green
+
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "Unique HUB",
+                        Text = "ยืนยันคีย์และล็อคเครื่องสำเร็จ!",
+                        Duration = 3
+                    })
+                end)
+
+                task.wait(0.8)
+                KeyScreen:Destroy()
+                launchAutoFishing()
+            else
+                KeyStatusMsg.Text = "✗ " .. msg
+                KeyStatusMsg.TextColor3 = Theme.Red
+                KeyDot.BackgroundColor3 = Theme.Red
+                SubmitBtn.Text = "✓  ยืนยันคีย์ (SUBMIT KEY)"
+                SubmitBtn.BackgroundColor3 = Theme.Green
+            end
+        end)
+    end)
+
+    -- ปุ่มวาง / ล้างข้อความ
+    local PasteRow = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 28),
+        Position = UDim2.new(0, 0, 0, 270),
+        BackgroundTransparency = 1,
+        Parent = KeyBody,
+    })
+    Create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 8),
+        Parent = PasteRow,
+    })
+
+    local PasteBtn = Create("TextButton", {
+        Text = "📋 วางจาก Clipboard",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Theme.Card,
+        Size = UDim2.new(0.48, 0, 1, 0),
+        AutoButtonColor = false,
+        Parent = PasteRow,
+    })
+    RoundCorner(PasteBtn, 6)
+
+    local ClearBtn = Create("TextButton", {
+        Text = "🗑 ล้างข้อความ",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Theme.Card,
+        Size = UDim2.new(0.48, 0, 1, 0),
+        AutoButtonColor = false,
+        Parent = PasteRow,
+    })
+    RoundCorner(ClearBtn, 6)
+
+    PasteBtn.MouseButton1Click:Connect(function()
+        if getclipboard then
+            pcall(function() KeyInput.Text = getclipboard() end)
+        end
+    end)
+    ClearBtn.MouseButton1Click:Connect(function()
+        KeyInput.Text = ""
+    end)
+
+    Create("TextLabel", {
+        Text = "Unique HUB © 2026 • GitHub Verified • HWID Locked",
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextColor3 = Color3.fromRGB(100, 100, 110),
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, 312),
+        Size = UDim2.new(1, 0, 0, 16),
+        Parent = KeyBody,
+    })
+
+    -- Drag window
+    local dragKey = false
+    local dragKeyInput, dragKeyStart, startKeyPos
+
+    KeyHeader.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragKey = true
+            dragKeyStart = input.Position
+            startKeyPos = KeyWindow.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragKey = false
+                end
+            end)
+        end
+    end)
+
+    KeyHeader.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragKeyInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragKeyInput and dragKey then
+            local delta = input.Position - dragKeyStart
+            KeyWindow.Position = UDim2.new(
+                startKeyPos.X.Scale, startKeyPos.X.Offset + delta.X,
+                startKeyPos.Y.Scale, startKeyPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+-- ══════════════════ MAIN AUTO FISHING SYSTEM ══════════════════
+launchAutoFishing = function()
+    local doCast = nil
+    local updateBackpackUI = nil
+    local isDepositing = false
+    local isRestocking = false
+    local performAutoDeposit = nil
+    local performAutoRestock = nil
+    local scheduleNextCast = nil
+    local nextAllowedCastTime = 0
+    local isCastingDebounce = false
+    local currentScheduleId = 0
+    local saveUserConfig = nil
+
+    local MainWindow = Create("Frame", {
+        Name = "MainWindow",
+        Size = UDim2.new(0, 390, 0, 520),
+        Position = UDim2.new(0.5, -195, 0.5, -260),
+        BackgroundColor3 = Theme.BG,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Visible = true,
+        Parent = ScreenGui,
+    })
+    RoundCorner(MainWindow, 12)
+    AddStroke(MainWindow, Theme.Border, 1)
+
+    local Header = Create("Frame", {
+        Name = "Header",
+        Size = UDim2.new(1, 0, 0, 48),
+        BackgroundColor3 = Theme.Header,
+        BorderSizePixel = 0,
+        Parent = MainWindow,
+    })
+    RoundCorner(Header, 12)
+
+    Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 12),
+        Position = UDim2.new(0, 0, 1, -12),
+        BackgroundColor3 = Theme.Header,
+        BorderSizePixel = 0,
+        Parent = Header,
+    })
+
+    local StatusDot = Create("Frame", {
+        Size = UDim2.new(0, 10, 0, 10),
+        Position = UDim2.new(0, 14, 0.5, -5),
+        BackgroundColor3 = Theme.TextMuted,
+        BorderSizePixel = 0,
+        Parent = Header,
+    })
+    RoundCorner(StatusDot, 5)
+
+    Create("TextLabel", {
+        Text = "Unique HUB",
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextColor3 = Theme.White,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 32, 0, 6),
+        Size = UDim2.new(0, 120, 0, 20),
+        Parent = Header,
+    })
+
+    Create("TextLabel", {
+        Text = "AUTO FISHING SYSTEM (HWID LOCKED)",
+        Font = Enum.Font.Gotham,
+        TextSize = 10,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 32, 0, 26),
+        Size = UDim2.new(0, 200, 0, 16),
+        Parent = Header,
+    })
+
+    local isMinimized = false
+    local MinBtn = Create("TextButton", {
+        Text = "-",
+        Font = Enum.Font.GothamBold,
+        TextSize = 18,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Color3.fromRGB(34, 34, 42),
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(1, -66, 0.5, -14),
+        AutoButtonColor = false,
+        Parent = Header,
+    })
+    RoundCorner(MinBtn, 6)
+
+    local CloseBtn = Create("TextButton", {
+        Text = "✕",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Color3.fromRGB(34, 34, 42),
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(1, -34, 0.5, -14),
+        AutoButtonColor = false,
+        Parent = Header,
+    })
+    RoundCorner(CloseBtn, 6)
+
+    local Body = Create("ScrollingFrame", {
+        Name = "Body",
+        Size = UDim2.new(1, -16, 1, -56),
+        Position = UDim2.new(0, 8, 0, 52),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = Theme.BorderLight,
+        CanvasSize = UDim2.new(0, 0, 0, 1450),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Parent = MainWindow,
+    })
+
+    Create("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 10),
+        Parent = Body,
+    })
+
+    Create("UIPadding", {
+        PaddingTop = UDim.new(0, 4),
+        PaddingBottom = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 4),
+        PaddingRight = UDim.new(0, 8),
+        Parent = Body,
+    })
+
+    local function CreateCard(parent, height, title)
+        local card = Create("Frame", {
+            Size = UDim2.new(1, 0, 0, height),
+            BackgroundColor3 = Theme.Card,
+            BorderSizePixel = 0,
+            Parent = parent,
+        })
+        RoundCorner(card, 8)
+        AddStroke(card, Theme.Border, 1)
+
+        if title then
+            Create("TextLabel", {
+                Text = title,
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextColor3 = Theme.TextMuted,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0, 12, 0, 8),
+                Size = UDim2.new(1, -24, 0, 16),
+                Parent = card,
+            })
+        end
+        return card
+    end
+
+    -- SECTION 1: MAIN TOGGLE & STATUS
+    local ToggleCard = CreateCard(Body, 110)
+
+    local MainToggleBtn = Create("TextButton", {
+        Text = "🎣  เปิดตกปลา AUTO : ปิด (OFF)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 48),
+        Size = UDim2.new(1, -20, 0, 42),
+        Position = UDim2.new(0, 10, 0, 10),
+        AutoButtonColor = false,
+        Parent = ToggleCard,
+    })
+    RoundCorner(MainToggleBtn, 8)
+    local MainToggleStroke = AddStroke(MainToggleBtn, Theme.Border, 1)
+
+    local StatusLabel = Create("TextLabel", {
+        Text = "สถานะ: พร้อมใช้งาน (Idle)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 14, 0, 60),
+        Size = UDim2.new(0.55, -14, 0, 18),
+        Parent = ToggleCard,
+    })
+
+    local StatsLabel = Create("TextLabel", {
+        Text = "สำเร็จ: 0  |  หลุด: 0  |  ของล่าสุด: -",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 14, 0, 82),
+        Size = UDim2.new(0.55, -14, 0, 16),
+        Parent = ToggleCard,
+    })
+
+    local ChubbyCountLabel = Create("TextLabel", {
+        Text = "1. Chubby: 0",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.Yellow,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0.55, 10, 0, 60),
+        Size = UDim2.new(0.45, -45, 0, 18),
+        Parent = ToggleCard,
+    })
+
+    local SpiderCountLabel = Create("TextLabel", {
+        Text = "2. แมงมุมใยทมิฬ: 0",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.Yellow,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0.55, 10, 0, 80),
+        Size = UDim2.new(0.45, -45, 0, 18),
+        Parent = ToggleCard,
+    })
+
+    local RefreshBaitBtn = Create("TextButton", {
+        Text = "🔄",
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Position = UDim2.new(1, -38, 0, 62),
+        Size = UDim2.new(0, 26, 0, 34),
+        AutoButtonColor = false,
+        Parent = ToggleCard,
+    })
+    RoundCorner(RefreshBaitBtn, 6)
+    
+    local function fetchBaitCounts()
+        local cCount = 0
+        local sCount = 0
+        local cWh = 0
+        local sWh = 0
+
+        -- วิธีที่ 1: ตรวจนับจาก Profile (ทั้งกระเป๋า Backpack และคลัง Warehouse)
+        pcall(function()
+            local prof = getLatestProfile()
+            if prof then
+                if prof.Backpack and prof.Backpack.Slots then
+                    for _, slot in pairs(prof.Backpack.Slots) do
+                        if typeof(slot) == "table" and slot.ItemId then
+                            local q = math.max(0, math.floor(tonumber(slot.Qty) or 1))
+                            local id = tostring(slot.ItemId)
+                            local idLower = string.lower(id)
+                            if id == "BaitChubby" or string.find(idLower, "chubby") then
+                                cCount = cCount + q
+                            elseif id == "BaitSpider" or string.find(idLower, "spider") or string.find(idLower, "ใยทมิฬ") then
+                                sCount = sCount + q
+                            end
+                        end
+                    end
+                end
+                if prof.Warehouse then
+                    for _, item in ipairs(prof.Warehouse) do
+                        if typeof(item) == "table" and item.ItemId then
+                            local q = math.max(0, math.floor(tonumber(item.Qty) or 1))
+                            local id = tostring(item.ItemId)
+                            local idLower = string.lower(id)
+                            if id == "BaitChubby" or string.find(idLower, "chubby") then
+                                cWh = cWh + q
+                            elseif id == "BaitSpider" or string.find(idLower, "spider") or string.find(idLower, "ใยทมิฬ") then
+                                sWh = sWh + q
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        -- วิธีที่ 2: สำรองตรวจนับจากหน้าจอ UI (SlotCards และ BagHud) เผื่อ Profile ยังไม่โหลด
+        if cCount == 0 and sCount == 0 then
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local csgoUi = pg and pg:FindFirstChild("CSGO_UI")
+                if csgoUi then
+                    for _, v in ipairs(csgoUi:GetDescendants()) do
+                        if (v.Name == "Name" or v.Name == "ItemName") and v:IsA("TextLabel") then
+                            local txt = tostring(v.Text or "")
+                            local parent = v.Parent
+                            local qtyLab = parent and (parent:FindFirstChild("Qty") or parent:FindFirstChild("QtyChip"))
+                            local q = 1
+                            if qtyLab and qtyLab:IsA("TextLabel") then
+                                local m = string.match(tostring(qtyLab.Text or ""), "%d+")
+                                if m then q = tonumber(m) or 1 end
+                            end
+                            if string.find(txt, "Chubby") or string.find(txt, "ชับบี้") then
+                                cCount = cCount + q
+                            elseif string.find(txt, "แมงมุมใยทมิฬ") or string.find(txt, "ใยทมิฬ") or string.find(txt, "Spider") then
+                                sCount = sCount + q
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        if ChubbyCountLabel then
+            if cWh > 0 then
+                ChubbyCountLabel.Text = string.format("1. Chubby: %d (คลัง: %d)", cCount, cWh)
+            else
+                ChubbyCountLabel.Text = "1. Chubby: " .. tostring(cCount)
+            end
+        end
+        if SpiderCountLabel then
+            if sWh > 0 then
+                SpiderCountLabel.Text = string.format("2. แมงมุม: %d (คลัง: %d)", sCount, sWh)
+            else
+                SpiderCountLabel.Text = "2. แมงมุมใยทมิฬ: " .. tostring(sCount)
+            end
+        end
+    end
+
+    RefreshBaitBtn.MouseButton1Click:Connect(fetchBaitCounts)
+    
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if not (ScreenGui and ScreenGui.Parent) then break end
+            fetchBaitCounts()
+            if updateBackpackUI then
+                pcall(updateBackpackUI)
+            end
+        end
+    end)
+
+    -- SECTION 2: ROD SELECTOR
+    local RodCard = CreateCard(Body, 150, "เบ็ดตกปลา (FISHING ROD)")
+
+    local RodCurrentLabel = Create("TextLabel", {
+        Text = "เบ็ดที่เลือก: [ อัตโนมัติ (Auto Detect) ]",
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 30),
+        Size = UDim2.new(1, -24, 0, 18),
+        Parent = RodCard,
+    })
+
+    local RodButtonsFrame = Create("Frame", {
+        Size = UDim2.new(1, -24, 0, 56),
+        Position = UDim2.new(0, 12, 0, 54),
+        BackgroundTransparency = 1,
+        Parent = RodCard,
+    })
+
+    Create("UIGridLayout", {
+        CellSize = UDim2.new(0, 110, 0, 26),
+        CellPadding = UDim2.new(0, 6, 0, 4),
+        Parent = RodButtonsFrame,
+    })
+
+    local rodButtons = {}
+
+    local function updateRodSelectionUI(val)
+        Settings.SelectedRodSlot = val
+        if val == "auto" then
+            RodCurrentLabel.Text = "เบ็ดที่เลือก: [ อัตโนมัติ (Auto Detect) ]"
+        else
+            RodCurrentLabel.Text = "เบ็ดที่เลือก: ช่องที่ " .. tostring(val)
+        end
+        for k, btn in pairs(rodButtons) do
+            if k == tostring(val) then
+                btn.BackgroundColor3 = Theme.Green
+                btn.TextColor3 = Theme.White
+            else
+                btn.BackgroundColor3 = Theme.CardHover
+                btn.TextColor3 = Theme.TextMuted
+            end
+        end
+    end
+
+    local autoRodBtn = Create("TextButton", {
+        Text = "อัตโนมัติ (Auto)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.Green,
+        AutoButtonColor = false,
+        Parent = RodButtonsFrame,
+    })
+    RoundCorner(autoRodBtn, 4)
+    rodButtons["auto"] = autoRodBtn
+    autoRodBtn.MouseButton1Click:Connect(function() updateRodSelectionUI("auto") end)
+
+    for s = 1, 5 do
+        local btn = Create("TextButton", {
+            Text = "ช่อง " .. tostring(s),
+            Font = Enum.Font.GothamBold,
+            TextSize = 11,
+            TextColor3 = Theme.TextMuted,
+            BackgroundColor3 = Theme.CardHover,
+            AutoButtonColor = false,
+            Parent = RodButtonsFrame,
+        })
+        RoundCorner(btn, 4)
+        rodButtons[tostring(s)] = btn
+        btn.MouseButton1Click:Connect(function() updateRodSelectionUI(s) end)
+    end
+
+    -- SECTION 3: BAIT SELECTOR
+    local BaitCard = CreateCard(Body, 150, "เหยื่อตกปลา (FISHING BAIT)")
+
+    local BaitCurrentLabel = Create("TextLabel", {
+        Text = "เหยื่อที่เลือก: [ อัตโนมัติ (Auto Detect) ]",
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 30),
+        Size = UDim2.new(1, -24, 0, 18),
+        Parent = BaitCard,
+    })
+
+    local BaitButtonsFrame = Create("Frame", {
+        Size = UDim2.new(1, -24, 0, 56),
+        Position = UDim2.new(0, 12, 0, 54),
+        BackgroundTransparency = 1,
+        Parent = BaitCard,
+    })
+
+    Create("UIGridLayout", {
+        CellSize = UDim2.new(0, 110, 0, 26),
+        CellPadding = UDim2.new(0, 6, 0, 4),
+        Parent = BaitButtonsFrame,
+    })
+
+    local baitButtons = {}
+
+    local function updateBaitSelectionUI(val)
+        Settings.SelectedBaitSlot = val
+        if val == "auto" then
+            BaitCurrentLabel.Text = "เหยื่อที่เลือก: [ อัตโนมัติ (Auto Detect) ]"
+        else
+            BaitCurrentLabel.Text = "เหยื่อที่เลือก: ช่องที่ " .. tostring(val)
+        end
+        for k, btn in pairs(baitButtons) do
+            if k == tostring(val) then
+                btn.BackgroundColor3 = Theme.Green
+                btn.TextColor3 = Theme.White
+            else
+                btn.BackgroundColor3 = Theme.CardHover
+                btn.TextColor3 = Theme.TextMuted
+            end
+        end
+    end
+
+    local autoBaitBtn = Create("TextButton", {
+        Text = "อัตโนมัติ (Auto)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.Green,
+        AutoButtonColor = false,
+        Parent = BaitButtonsFrame,
+    })
+    RoundCorner(autoBaitBtn, 4)
+    baitButtons["auto"] = autoBaitBtn
+    autoBaitBtn.MouseButton1Click:Connect(function() updateBaitSelectionUI("auto") end)
+
+    local popularBaitSlots = {4, 3, 5, 6, 7}
+    for _, s in ipairs(popularBaitSlots) do
+        local btn = Create("TextButton", {
+            Text = (s <= 6 and "ช่อง " or "เป๋า ") .. tostring(s),
+            Font = Enum.Font.GothamBold,
+            TextSize = 11,
+            TextColor3 = Theme.TextMuted,
+            BackgroundColor3 = Theme.CardHover,
+            AutoButtonColor = false,
+            Parent = BaitButtonsFrame,
+        })
+        RoundCorner(btn, 4)
+        baitButtons[tostring(s)] = btn
+        btn.MouseButton1Click:Connect(function() updateBaitSelectionUI(s) end)
+    end
+
+    -- SECTION 4: SETTINGS
+    local SettingsCard = CreateCard(Body, 130, "การตั้งค่า (SETTINGS)")
+
+    local AutoEquipToggle = Create("TextButton", {
+        Text = "✓ สลับถือเบ็ดอัตโนมัติก่อนเหวี่ยง (Auto Equip): เปิด",
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = Theme.Green,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 28),
+        Position = UDim2.new(0, 12, 0, 32),
+        AutoButtonColor = false,
+        Parent = SettingsCard,
+    })
+    RoundCorner(AutoEquipToggle, 6)
+    AutoEquipToggle.MouseButton1Click:Connect(function()
+        Settings.AutoEquipRod = not Settings.AutoEquipRod
+        AutoEquipToggle.Text = Settings.AutoEquipRod
+            and "✓ สลับถือเบ็ดอัตโนมัติก่อนเหวี่ยง (Auto Equip): เปิด"
+            or "✗ สลับถือเบ็ดอัตโนมัติก่อนเหวี่ยง (Auto Equip): ปิด"
+        AutoEquipToggle.TextColor3 = Settings.AutoEquipRod and Theme.Green or Theme.Red
+    end)
+
+    local DelayLabel = Create("TextLabel", {
+        Text = "ระยะเวลารอเหวี่ยงครั้งถัดไป: " .. string.format("%.1f", Settings.CastDelay) .. " วินาที",
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 68),
+        Size = UDim2.new(1, -120, 0, 24),
+        Parent = SettingsCard,
+    })
+
+    local MinusDelayBtn = Create("TextButton", {
+        Text = "-",
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0, 32, 0, 24),
+        Position = UDim2.new(1, -94, 0, 68),
+        AutoButtonColor = false,
+        Parent = SettingsCard,
+    })
+    RoundCorner(MinusDelayBtn, 4)
+
+    local PlusDelayBtn = Create("TextButton", {
+        Text = "+",
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0, 32, 0, 24),
+        Position = UDim2.new(1, -54, 0, 68),
+        AutoButtonColor = false,
+        Parent = SettingsCard,
+    })
+    RoundCorner(PlusDelayBtn, 4)
+
+    MinusDelayBtn.MouseButton1Click:Connect(function()
+        Settings.CastDelay = math.max(1.0, math.floor((Settings.CastDelay - 0.5) * 10 + 0.5) / 10)
+        DelayLabel.Text = "ระยะเวลารอเหวี่ยงครั้งถัดไป: " .. string.format("%.1f", Settings.CastDelay) .. " วินาที"
+        if saveUserConfig then saveUserConfig() end
+    end)
+
+    PlusDelayBtn.MouseButton1Click:Connect(function()
+        Settings.CastDelay = math.min(20.0, math.floor((Settings.CastDelay + 0.5) * 10 + 0.5) / 10)
+        DelayLabel.Text = "ระยะเวลารอเหวี่ยงครั้งถัดไป: " .. string.format("%.1f", Settings.CastDelay) .. " วินาที"
+        if saveUserConfig then saveUserConfig() end
+    end)
+
+    Create("TextLabel", {
+        Text = "⚡ โหมดตวัดเบ็ด: ตวัดกลางแถบเขียว 100% (Perfect Reel)",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.Green,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 98),
+        Size = UDim2.new(1, -24, 0, 20),
+        Parent = SettingsCard,
+    })
+
+    -- SECTION 5: ACTION BUTTONS
+    local ActionCard = CreateCard(Body, 120, "คำสั่งพิเศษ (QUICK ACTIONS)")
+
+    local ActionBtnsFrame = Create("Frame", {
+        Size = UDim2.new(1, -24, 0, 42),
+        Position = UDim2.new(0, 12, 0, 32),
+        BackgroundTransparency = 1,
+        Parent = ActionCard,
+    })
+
+    Create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 8),
+        Parent = ActionBtnsFrame,
+    })
+
+    local ScanBtn = Create("TextButton", {
+        Text = "🔄 สแกนกระเป๋า",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.31, 0, 1, 0),
+        AutoButtonColor = false,
+        Parent = ActionBtnsFrame,
+    })
+    RoundCorner(ScanBtn, 6)
+
+    local CastNowBtn = Create("TextButton", {
+        Text = "🎣 เหวี่ยงทันที",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.31, 0, 1, 0),
+        AutoButtonColor = false,
+        Parent = ActionBtnsFrame,
+    })
+    RoundCorner(CastNowBtn, 6)
+
+    local CancelBtn = Create("TextButton", {
+        Text = "❌ ยกเลิกการตก",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.31, 0, 1, 0),
+        AutoButtonColor = false,
+        Parent = ActionBtnsFrame,
+    })
+    RoundCorner(CancelBtn, 6)
+
+    local LogoutBtn = Create("TextButton", {
+        Text = "🔑 เปลี่ยนคีย์ / ออกจากระบบ (Logout Key)",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 26),
+        Position = UDim2.new(0, 12, 0, 82),
+        AutoButtonColor = false,
+        Parent = ActionCard,
+    })
+    RoundCorner(LogoutBtn, 6)
+    LogoutBtn.MouseButton1Click:Connect(function()
+        deleteKeyLocal()
+        Settings.AutoFishEnabled = false
+        ScreenGui:Destroy()
+        openKeySystemUI()
+    end)
+
+
+
+    -- SECTION 6: AUTO WALK
+    local AutoWalkCard = CreateCard(Body, 220, "ระบบเดินอัตโนมัติ (AUTO WALK)")
+
+    local StoragePosText = Create("TextLabel", {
+        Text = "จุดคลัง: ยังไม่ได้ตั้งค่า",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 30),
+        Size = UDim2.new(0.5, -12, 0, 20),
+        Parent = AutoWalkCard,
+    })
+
+    local FishingPosText = Create("TextLabel", {
+        Text = "จุดตกปลา: ยังไม่ได้ตั้งค่า",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0.5, 0, 0, 30),
+        Size = UDim2.new(0.5, -12, 0, 20),
+        Parent = AutoWalkCard,
+    })
+
+    local SaveStorageBtn = Create("TextButton", {
+        Text = "📍 บันทึกจุดคลัง",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.46, 0, 0, 30),
+        Position = UDim2.new(0, 12, 0, 56),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(SaveStorageBtn, 6)
+
+    local SaveFishingBtn = Create("TextButton", {
+        Text = "📍 บันทึกจุดตกปลา",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.46, 0, 0, 30),
+        Position = UDim2.new(0.5, 2, 0, 56),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(SaveFishingBtn, 6)
+
+    local WalkStorageBtn = Create("TextButton", {
+        Text = "🚶 เทสเดินไปคลัง",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.46, 0, 0, 30),
+        Position = UDim2.new(0, 12, 0, 92),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(WalkStorageBtn, 6)
+
+    local WalkFishingBtn = Create("TextButton", {
+        Text = "🚶 เทสเดินไปจุดตกปลา",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(0.46, 0, 0, 30),
+        Position = UDim2.new(0.5, 2, 0, 92),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(WalkFishingBtn, 6)
+
+    local ResetPointsBtn = Create("TextButton", {
+        Text = "🔄 รีเซ็ตจุดทั้งหมด",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.Red,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 30),
+        Position = UDim2.new(0, 12, 0, 134),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(ResetPointsBtn, 6)
+
+    local ToggleNoclipBtn = Create("TextButton", {
+        Text = Settings.UseNoclip and "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : เปิด (ON)" or "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : ปิด (OFF)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Settings.UseNoclip and Theme.Green or Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 30),
+        Position = UDim2.new(0, 12, 0, 174),
+        AutoButtonColor = false,
+        Parent = AutoWalkCard,
+    })
+    RoundCorner(ToggleNoclipBtn, 6)
+
+    local CONFIG_FILE = "unique_fishing_config.json"
+    local SavedStoragePos = nil
+    local SavedFishingPos = nil
+    local SavedFishingLook = nil
+
+    local noclipConnection = nil
+    local isNoclipActive = false
+
+    local function enableNoclip()
+        if noclipConnection then return end
+        isNoclipActive = true
+        noclipConnection = RunService.Stepped:Connect(function()
+            if not isNoclipActive then return end
+            local char = LocalPlayer.Character
+            if char then
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end
+
+    local function disableNoclip()
+        isNoclipActive = false
+        if noclipConnection then
+            pcall(function() noclipConnection:Disconnect() end)
+            noclipConnection = nil
+        end
+    end
+
+    ToggleNoclipBtn.MouseButton1Click:Connect(function()
+        Settings.UseNoclip = not Settings.UseNoclip
+        if Settings.UseNoclip then
+            ToggleNoclipBtn.Text = "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : เปิด (ON)"
+            ToggleNoclipBtn.TextColor3 = Theme.Green
+        else
+            ToggleNoclipBtn.Text = "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : ปิด (OFF)"
+            ToggleNoclipBtn.TextColor3 = Theme.White
+            disableNoclip()
+        end
+        saveUserConfig()
+    end)
+
+    saveUserConfig = function()
+        pcall(function()
+            if writefile then
+                local data = {
+                    StoragePos = SavedStoragePos and {SavedStoragePos.X, SavedStoragePos.Y, SavedStoragePos.Z},
+                    FishingPos = SavedFishingPos and {SavedFishingPos.X, SavedFishingPos.Y, SavedFishingPos.Z},
+                    FishingLook = SavedFishingLook and {SavedFishingLook.X, SavedFishingLook.Y, SavedFishingLook.Z},
+                    AutoRestock = Settings.AutoRestock,
+                    RestockBaitName = Settings.RestockBaitName,
+                    RestockAmount = Settings.RestockAmount,
+                    UseNoclip = Settings.UseNoclip,
+                    AutoDeposit = Settings.AutoDeposit,
+                    CastDelay = Settings.CastDelay,
+                }
+                writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+            end
+        end)
+    end
+
+    SaveStorageBtn.MouseButton1Click:Connect(function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            SavedStoragePos = hrp.Position
+            StoragePosText.Text = string.format("จุดคลัง: %d, %d, %d", math.floor(SavedStoragePos.X), math.floor(SavedStoragePos.Y), math.floor(SavedStoragePos.Z))
+            StoragePosText.TextColor3 = Theme.Green
+            saveUserConfig()
+        end
+    end)
+
+    SaveFishingBtn.MouseButton1Click:Connect(function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            SavedFishingPos = hrp.Position
+            SavedFishingLook = hrp.CFrame.LookVector
+            FishingPosText.Text = string.format("จุดตกปลา: %d, %d, %d", math.floor(SavedFishingPos.X), math.floor(SavedFishingPos.Y), math.floor(SavedFishingPos.Z))
+            FishingPosText.TextColor3 = Theme.Green
+            saveUserConfig()
+        end
+    end)
+
+    local PathfindingService = game:GetService("PathfindingService")
+    local currentWalkId = 0
+
+    -- คำนวณเส้นทางหลบหลีกสิ่งกีดขวางแบบปลอดภัย (Safe Pathfinding)
+    local function computeSafePath(fromPos, toPos)
+        local path = PathfindingService:CreatePath({
+            AgentRadius = 1.8,
+            AgentHeight = 4.8,
+            AgentCanJump = true,
+            WaypointSpacing = 3.5,
+            Costs = {
+                Water = 100,
+            }
+        })
+
+        -- กรณีจุดตกปลาอยู่ริมตลิ่งหรือนอกขอบ NavMesh ให้ทดสอบจุดเยื้องเข้ามาทางผู้เล่น
+        local offsets = {
+            Vector3.zero,
+            (fromPos - toPos).Unit * 3,
+            (fromPos - toPos).Unit * 6,
+            Vector3.new(2, 0, 0),
+            Vector3.new(-2, 0, 0),
+            Vector3.new(0, 0, 2),
+            Vector3.new(0, 0, -2),
+        }
+
+        for _, off in ipairs(offsets) do
+            local dest = toPos + Vector3.new(off.X, 0, off.Z)
+            local ok = pcall(function()
+                path:ComputeAsync(fromPos, dest)
+            end)
+            if ok and path.Status == Enum.PathStatus.Success then
+                local wps = path:GetWaypoints()
+                if #wps > 1 then
+                    return path, wps
+                end
+            end
+        end
+
+        -- ถ้าระยะทางไกลเกิน 80 studs ให้แบ่งครึ่งทางคำนวณ
+        local dist = (fromPos - toPos).Magnitude
+        if dist > 80 then
+            local mid = (fromPos + toPos) / 2
+            local okMid = pcall(function()
+                path:ComputeAsync(fromPos, mid)
+            end)
+            if okMid and path.Status == Enum.PathStatus.Success then
+                local wps1 = path:GetWaypoints()
+                local okMid2 = pcall(function()
+                    path:ComputeAsync(mid, toPos)
+                end)
+                if okMid2 and path.Status == Enum.PathStatus.Success then
+                    local wps2 = path:GetWaypoints()
+                    local combined = {}
+                    for _, w in ipairs(wps1) do table.insert(combined, w) end
+                    for i = 2, #wps2 do table.insert(combined, wps2[i]) end
+                    return path, combined
+                end
+            end
+        end
+
+        return nil, nil
+    end
+
+    local function walkTo(targetPos)
+        if not targetPos then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not (hrp and hum) then return end
+
+        currentWalkId = currentWalkId + 1
+        local walkId = currentWalkId
+
+        task.spawn(function()
+            local function continuousMove(target, timeout)
+                local startTime = os.clock()
+                local stuckCount = 0
+                local lastPos = hrp and hrp.Position or Vector3.zero
+                local lastMoveCheck = os.clock()
+
+                while currentWalkId == walkId and char and hum and hum.Parent and hrp and hrp.Parent do
+                    if hum.WalkSpeed < 14 then
+                        hum.WalkSpeed = 16
+                    end
+                    hum.AutoRotate = true
+
+                    local dist2D = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(target.X, 0, target.Z)).Magnitude
+                    if dist2D <= 3.5 then
+                        return true
+                    end
+
+                    if (os.clock() - startTime) > (timeout or 8) then
+                        return false
+                    end
+
+                    hum:MoveTo(target)
+
+                    -- เช็คการติดสิ่งกีดขวางทุกๆ 0.25 วินาที
+                    if (os.clock() - lastMoveCheck) >= 0.25 then
+                        local moved = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(lastPos.X, 0, lastPos.Z)).Magnitude
+                        lastPos = hrp.Position
+                        lastMoveCheck = os.clock()
+
+                        if moved < 0.45 then
+                            stuckCount = stuckCount + 1
+                            hum.Jump = true
+                            if stuckCount >= 2 then
+                                -- เดินสไลด์ออกข้าง 90 องศา (Strafe) เพื่อหลุดจากขอบประตู เสา หรือมุมตึก
+                                local dir = (target - hrp.Position).Unit
+                                local rightVec = Vector3.new(-dir.Z, 0, dir.X)
+                                local dodgeTarget = hrp.Position + rightVec * 3.5
+                                hum:MoveTo(dodgeTarget)
+                                task.wait(0.3)
+                                stuckCount = 0
+                            end
+                        else
+                            stuckCount = 0
+                        end
+                    end
+
+                    task.wait(0.05)
+                end
+                return false
+            end
+
+            local path, waypoints = computeSafePath(hrp.Position, targetPos)
+
+            if waypoints and #waypoints > 0 then
+                for i, waypoint in ipairs(waypoints) do
+                    if currentWalkId ~= walkId then break end
+                    if waypoint.Action == Enum.PathWaypointAction.Jump then
+                        hum.Jump = true
+                    end
+                    continuousMove(waypoint.Position, 5)
+                end
+            else
+                -- ถ้าไม่มีเส้นทาง Pathfinding ให้เดินตรงพร้อมระบบสไลด์หลบมุม
+                continuousMove(targetPos, 45)
+            end
+
+            if currentWalkId == walkId and hum and hrp then
+                hum:MoveTo(hrp.Position)
+            end
+        end)
+    end
+
+    local function walkToWait(targetPos, maxWaitSec)
+        if not targetPos then return false end
+        if Settings.UseNoclip then
+            enableNoclip()
+        end
+        walkTo(targetPos)
+        local startT = os.clock()
+        local limit = maxWaitSec or 45
+        local reached = false
+        while (os.clock() - startT) < limit do
+            task.wait(0.2)
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not hrp then break end
+            local dist2D = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+            if dist2D <= 4.5 then
+                reached = true
+                break
+            end
+            -- ปลดล็อคความเร็วตัวละครตลอดการเดินทาง
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed < 14 then
+                hum.WalkSpeed = 16
+                hum.AutoRotate = true
+            end
+            LocalPlayer:SetAttribute("CSGO_Paused", false)
+            LocalPlayer:SetAttribute("CSGO_UiUnlock", false)
+        end
+        currentWalkId = currentWalkId + 1
+        if Settings.UseNoclip then
+            disableNoclip()
+        end
+        return reached
+    end
+
+    WalkStorageBtn.MouseButton1Click:Connect(function()
+        if SavedStoragePos then
+            task.spawn(function()
+                updateUIStatus("กำลังเดินไปคลัง (ทดสอบ)...", Theme.Yellow)
+                local reached = walkToWait(SavedStoragePos, 50)
+                unfreezePlayer()
+                if reached then
+                    updateUIStatus("ถึงจุดคลังแล้ว (ทดสอบ)", Theme.Green)
+                else
+                    updateUIStatus("หมดเวลาเดินไปคลัง", Theme.Red)
+                end
+            end)
+        else
+            updateUIStatus("ยังไม่ได้บันทึกจุดคลัง!", Theme.Red)
+        end
+    end)
+
+    WalkFishingBtn.MouseButton1Click:Connect(function()
+        if SavedFishingPos then
+            task.spawn(function()
+                updateUIStatus("กำลังเดินไปจุดตกปลา (ทดสอบ)...", Theme.Yellow)
+                local reached = walkToWait(SavedFishingPos, 50)
+                unfreezePlayer()
+                if reached then
+                    if SavedFishingLook then
+                        pcall(function()
+                            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + Vector3.new(SavedFishingLook.X, 0, SavedFishingLook.Z))
+                            end
+                        end)
+                    end
+                    updateUIStatus("ถึงจุดตกปลาแล้ว (ทดสอบ)", Theme.Green)
+                else
+                    updateUIStatus("หมดเวลาเดินไปจุดตกปลา", Theme.Red)
+                end
+            end)
+        else
+            updateUIStatus("ยังไม่ได้บันทึกจุดตกปลา!", Theme.Red)
+        end
+    end)
+
+    ResetPointsBtn.MouseButton1Click:Connect(function()
+        SavedStoragePos = nil
+        SavedFishingPos = nil
+        SavedFishingLook = nil
+        StoragePosText.Text = "จุดคลัง: ยังไม่ได้ตั้งค่า"
+        StoragePosText.TextColor3 = Theme.TextMuted
+        FishingPosText.Text = "จุดตกปลา: ยังไม่ได้ตั้งค่า"
+        FishingPosText.TextColor3 = Theme.TextMuted
+        saveUserConfig()
+    end)
+
+    -- SECTION 7: AUTO RESTOCK
+    local AutoRestockCard = CreateCard(Body, 190, "ระบบเติมเหยื่ออัตโนมัติ (AUTO RESTOCK)")
+
+    local ToggleRestockBtn = Create("TextButton", {
+        Text = "🔄 เติมเหยื่ออัตโนมัติ : ปิด (OFF)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 30),
+        Position = UDim2.new(0, 12, 0, 30),
+        AutoButtonColor = false,
+        Parent = AutoRestockCard,
+    })
+    RoundCorner(ToggleRestockBtn, 6)
+
+    Settings.AutoRestock = false
+    Settings.RestockBaitName = "Chubby"
+    Settings.RestockAmount = "10"
+
+    ToggleRestockBtn.MouseButton1Click:Connect(function()
+        Settings.AutoRestock = not Settings.AutoRestock
+        if Settings.AutoRestock then
+            ToggleRestockBtn.Text = "🔄 เติมเหยื่ออัตโนมัติ : เปิด (ON)"
+            ToggleRestockBtn.TextColor3 = Theme.Green
+        else
+            ToggleRestockBtn.Text = "🔄 เติมเหยื่ออัตโนมัติ : ปิด (OFF)"
+            ToggleRestockBtn.TextColor3 = Theme.White
+        end
+        saveUserConfig()
+    end)
+
+    -- ปุ่มลัดเลือกเหยื่อยอดนิยม
+    local PresetChubbyBtn = Create("TextButton", {
+        Text = "🐟 เลือก Chubby",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.Yellow,
+        BackgroundColor3 = Theme.Background,
+        Size = UDim2.new(0.48, -14, 0, 24),
+        Position = UDim2.new(0, 12, 0, 68),
+        AutoButtonColor = false,
+        Parent = AutoRestockCard,
+    })
+    RoundCorner(PresetChubbyBtn, 6)
+    AddStroke(PresetChubbyBtn, Theme.Border, 1)
+
+    local PresetSpiderBtn = Create("TextButton", {
+        Text = "🕷️ เลือก แมงมุม",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.Yellow,
+        BackgroundColor3 = Theme.Background,
+        Size = UDim2.new(0.48, -14, 0, 24),
+        Position = UDim2.new(0.5, 2, 0, 68),
+        AutoButtonColor = false,
+        Parent = AutoRestockCard,
+    })
+    RoundCorner(PresetSpiderBtn, 6)
+    AddStroke(PresetSpiderBtn, Theme.Border, 1)
+
+    Create("TextLabel", {
+        Text = "ชื่อเหยื่อ:",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 102),
+        Size = UDim2.new(0.3, 0, 0, 22),
+        Parent = AutoRestockCard,
+    })
+
+    local BaitNameInput = Create("TextBox", {
+        Text = Settings.RestockBaitName,
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.Background,
+        Position = UDim2.new(0.25, 12, 0, 100),
+        Size = UDim2.new(0.65, -12, 0, 26),
+        ClearTextOnFocus = false,
+        Parent = AutoRestockCard,
+    })
+    RoundCorner(BaitNameInput, 6)
+    BaitNameInput.FocusLost:Connect(function()
+        Settings.RestockBaitName = BaitNameInput.Text
+        saveUserConfig()
+    end)
+
+    PresetChubbyBtn.MouseButton1Click:Connect(function()
+        Settings.RestockBaitName = "Chubby"
+        BaitNameInput.Text = "Chubby"
+        saveUserConfig()
+    end)
+
+    PresetSpiderBtn.MouseButton1Click:Connect(function()
+        Settings.RestockBaitName = "แมงมุมใยทมิฬ"
+        BaitNameInput.Text = "แมงมุมใยทมิฬ"
+        saveUserConfig()
+    end)
+
+    Create("TextLabel", {
+        Text = "จำนวนที่ดึง:",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 138),
+        Size = UDim2.new(0.3, 0, 0, 22),
+        Parent = AutoRestockCard,
+    })
+
+    local BaitAmountInput = Create("TextBox", {
+        Text = Settings.RestockAmount,
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.Background,
+        Position = UDim2.new(0.25, 12, 0, 136),
+        Size = UDim2.new(0.65, -12, 0, 26),
+        ClearTextOnFocus = false,
+        Parent = AutoRestockCard,
+    })
+    RoundCorner(BaitAmountInput, 6)
+    BaitAmountInput.FocusLost:Connect(function()
+        Settings.RestockAmount = BaitAmountInput.Text
+        saveUserConfig()
+    end)
+
+    -- SECTION 8: AUTO DEPOSIT
+    local AutoDepositCard = CreateCard(Body, 140, "ระบบเก็บของเข้าคลังอัตโนมัติ (AUTO DEPOSIT)")
+
+    local ToggleDepositBtn = Create("TextButton", {
+        Text = Settings.AutoDeposit and "📦 เก็บของเข้าคลังอัตโนมัติ : เปิด (ON)" or "📦 เก็บของเข้าคลังอัตโนมัติ : ปิด (OFF)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = Settings.AutoDeposit and Theme.Green or Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 30),
+        Position = UDim2.new(0, 12, 0, 30),
+        AutoButtonColor = false,
+        Parent = AutoDepositCard,
+    })
+    RoundCorner(ToggleDepositBtn, 6)
+
+    ToggleDepositBtn.MouseButton1Click:Connect(function()
+        Settings.AutoDeposit = not Settings.AutoDeposit
+        if Settings.AutoDeposit then
+            ToggleDepositBtn.Text = "📦 เก็บของเข้าคลังอัตโนมัติ : เปิด (ON)"
+            ToggleDepositBtn.TextColor3 = Theme.Green
+        else
+            ToggleDepositBtn.Text = "📦 เก็บของเข้าคลังอัตโนมัติ : ปิด (OFF)"
+            ToggleDepositBtn.TextColor3 = Theme.White
+        end
+        saveUserConfig()
+    end)
+
+    local DepositStatusLabel = Create("TextLabel", {
+        Text = "ความจุ: กำลังตรวจสอบ...",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.Yellow,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 12, 0, 68),
+        Size = UDim2.new(1, -24, 0, 22),
+        Parent = AutoDepositCard,
+    })
+
+    local DepositNowBtn = Create("TextButton", {
+        Text = "📥 นำของเข้าคลังตอนนี้ (Deposit Now)",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = Theme.White,
+        BackgroundColor3 = Theme.CardHover,
+        Size = UDim2.new(1, -24, 0, 30),
+        Position = UDim2.new(0, 12, 0, 96),
+        AutoButtonColor = false,
+        Parent = AutoDepositCard,
+    })
+    RoundCorner(DepositNowBtn, 6)
+
+    DepositNowBtn.MouseButton1Click:Connect(function()
+        if not (SavedStoragePos and SavedFishingPos) then
+            updateUIStatus("กรุณาบันทึกจุดคลังและจุดตกปลาก่อน!", Theme.Red)
+            return
+        end
+        task.spawn(function()
+            if performAutoDeposit then
+                performAutoDeposit()
+            end
+        end)
+    end)
+
+    -- โหลดค่าเดิมที่บันทึกไว้ในเครื่องอัตโนมัติ
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE) then
+            local content = readfile(CONFIG_FILE)
+            local data = HttpService:JSONDecode(content)
+            if data then
+                if data.StoragePos and #data.StoragePos == 3 then
+                    SavedStoragePos = Vector3.new(data.StoragePos[1], data.StoragePos[2], data.StoragePos[3])
+                    StoragePosText.Text = string.format("จุดคลัง: %d, %d, %d", math.floor(SavedStoragePos.X), math.floor(SavedStoragePos.Y), math.floor(SavedStoragePos.Z))
+                    StoragePosText.TextColor3 = Theme.Green
+                end
+                if data.FishingPos and #data.FishingPos == 3 then
+                    SavedFishingPos = Vector3.new(data.FishingPos[1], data.FishingPos[2], data.FishingPos[3])
+                    FishingPosText.Text = string.format("จุดตกปลา: %d, %d, %d", math.floor(SavedFishingPos.X), math.floor(SavedFishingPos.Y), math.floor(SavedFishingPos.Z))
+                    FishingPosText.TextColor3 = Theme.Green
+                end
+                if data.FishingLook and #data.FishingLook == 3 then
+                    SavedFishingLook = Vector3.new(data.FishingLook[1], data.FishingLook[2], data.FishingLook[3])
+                end
+                if data.AutoRestock ~= nil then
+                    Settings.AutoRestock = data.AutoRestock
+                    if Settings.AutoRestock then
+                        ToggleRestockBtn.Text = "🔄 เติมเหยื่ออัตโนมัติ : เปิด (ON)"
+                        ToggleRestockBtn.TextColor3 = Theme.Green
+                    end
+                end
+                if data.RestockBaitName and data.RestockBaitName ~= "" then
+                    Settings.RestockBaitName = data.RestockBaitName
+                    BaitNameInput.Text = data.RestockBaitName
+                end
+                if data.RestockAmount and data.RestockAmount ~= "" then
+                    Settings.RestockAmount = tostring(data.RestockAmount)
+                    BaitAmountInput.Text = tostring(data.RestockAmount)
+                end
+                if data.UseNoclip ~= nil then
+                    Settings.UseNoclip = data.UseNoclip
+                    if ToggleNoclipBtn then
+                        ToggleNoclipBtn.Text = Settings.UseNoclip and "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : เปิด (ON)" or "👻 ทะลุสิ่งกีดขวาง (NOCLIP) : ปิด (OFF)"
+                        ToggleNoclipBtn.TextColor3 = Settings.UseNoclip and Theme.Green or Theme.White
+                    end
+                end
+                if data.AutoDeposit ~= nil then
+                    Settings.AutoDeposit = data.AutoDeposit
+                    if ToggleDepositBtn then
+                        ToggleDepositBtn.Text = Settings.AutoDeposit and "📦 เก็บของเข้าคลังอัตโนมัติ : เปิด (ON)" or "📦 เก็บของเข้าคลังอัตโนมัติ : ปิด (OFF)"
+                        ToggleDepositBtn.TextColor3 = Settings.AutoDeposit and Theme.Green or Theme.White
+                    end
+                end
+                if data.CastDelay ~= nil then
+                    local d = tonumber(data.CastDelay)
+                    if d and d >= 1.0 and d <= 20.0 then
+                        Settings.CastDelay = math.floor(d * 10 + 0.5) / 10
+                        if DelayLabel then
+                            DelayLabel.Text = "ระยะเวลารอเหวี่ยงครั้งถัดไป: " .. string.format("%.1f", Settings.CastDelay) .. " วินาที"
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    Create("TextLabel", {
+        Text = "💡 กดปุ่ม [X] เพื่อย่อหรือขยายหน้าต่างนี้ได้ตลอดเวลา",
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextColor3 = Theme.TextMuted,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 20),
+        Parent = Body,
+    })
+
+    -- ══════════════════ CORE FISHING ENGINE ══════════════════
+    local function updateUIStatus(text, color)
+        Stats.Status = text
+        StatusLabel.Text = "สถานะ: " .. text
+        if color then
+            StatusLabel.TextColor3 = color
+            StatusDot.BackgroundColor3 = color
+        else
+            StatusLabel.TextColor3 = Theme.Text
+            StatusDot.BackgroundColor3 = Theme.Green
+        end
+        StatsLabel.Text = string.format("สำเร็จ: %d  |  หลุด: %d  |  ของล่าสุด: %s", Stats.Catches, Stats.Misses, Stats.LastCatch)
+    end
+
+    local function equipRodIfNeeded(rodSlot)
+        if not Settings.AutoEquipRod then return end
+        local curSlot = tonumber(LocalPlayer:GetAttribute("CSGO_ActiveSlot"))
+        if curSlot ~= rodSlot and FishingRemotes.SwitchWeaponRequest then
+            FishingRemotes.SwitchWeaponRequest:FireServer(rodSlot)
+            task.wait(0.35)
+        end
+    end
+
+    local isRestocking = false
+
+    local function findWarehouseBait(searchName)
+        local prof = getLatestProfile()
+        if prof and prof.Warehouse then
+            local s = string.lower(tostring(searchName or ""))
+            -- 1. ตรวจสอบตรงกับที่ผู้เล่นระบุ
+            for _, item in ipairs(prof.Warehouse) do
+                if typeof(item) == "table" and item.InvId and item.ItemId then
+                    local qty = tonumber(item.Qty) or 1
+                    if qty > 0 then
+                        local lowerId = string.lower(item.ItemId)
+                        local shopItem = Config and Config.ShopItem and Config.ShopItem(item.ItemId)
+                        local itemName = (shopItem and shopItem.Name) or item.ItemId
+                        local lowerName = string.lower(itemName)
+
+                        if s == "chubby" or s == "baitchubby" or string.find(s, "chubby") then
+                            if lowerId == "baitchubby" or string.find(lowerId, "chubby") or string.find(lowerName, "chubby") then
+                                return item
+                            end
+                        elseif s == "spider" or s == "baitspider" or string.find(s, "แมงมุม") or string.find(s, "ใยทมิฬ") then
+                            if lowerId == "baitspider" or string.find(lowerId, "spider") or string.find(lowerName, "ใยทมิฬ") or string.find(lowerName, "spider") then
+                                return item
+                            end
+                        elseif s ~= "" and (string.find(lowerName, s, 1, true) or string.find(lowerId, s, 1, true)) then
+                            return item
+                        end
+                    end
+                end
+            end
+            -- 2. ถ้าไม่พบ ให้หาเหยื่อชิ้นใดก็ได้ในคลัง
+            for _, item in ipairs(prof.Warehouse) do
+                if typeof(item) == "table" and item.InvId and item.ItemId then
+                    local qty = tonumber(item.Qty) or 1
+                    if qty > 0 then
+                        local lowerId = string.lower(item.ItemId)
+                        if string.find(lowerId, "bait") or lowerId == "baitchubby" or lowerId == "baitspider" then
+                            return item
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function findBestBackpackSlotForBait(baitItemId)
+        local prof = getLatestProfile()
+        if prof and prof.Backpack and prof.Backpack.Slots then
+            -- ถ้ามีช่องที่มีเหยื่อชนิดนี้อยู่แล้ว ให้เบิกลงช่องเดิมเพื่อ stack
+            for slotIdx, slotData in pairs(prof.Backpack.Slots) do
+                if typeof(slotData) == "table" and slotData.ItemId == baitItemId then
+                    return tonumber(slotIdx) or 4
+                end
+            end
+            -- ถ้าไม่มี ให้หาช่องว่างช่องแรก (ช่อง 4 ถึง 30)
+            for s = 4, 30 do
+                local slotData = prof.Backpack.Slots[s]
+                if not slotData or slotData.ItemId == nil or slotData.ItemId == "" then
+                    return s
+                end
+            end
+        end
+        return 4
+    end
+
+    local function unfreezePlayer()
+        pcall(function()
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.WalkSpeed = 16
+                hum.AutoRotate = true
+                hum.JumpPower = 50
+                hum.PlatformStand = false
+            end
+            LocalPlayer:SetAttribute("CSGO_Paused", false)
+            LocalPlayer:SetAttribute("CSGO_UiUnlock", false)
+
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                local csgoUi = pg:FindFirstChild("CSGO_UI")
+                if csgoUi then
+                    local bagHud = csgoUi:FindFirstChild("BagHud", true)
+                    if bagHud then bagHud.Visible = false end
+                    local wh = csgoUi:FindFirstChild("Warehouse", true)
+                    if wh then wh.Visible = false end
+                end
+            end
+        end)
+    end
+
+    local function hasBaitAvailable()
+        -- 1. ตรวจสอบจาก Profile Backpack Slots
+        local hasProfileBait = false
+        pcall(function()
+            local prof = getLatestProfile()
+            if prof and prof.Backpack and prof.Backpack.Slots then
+                for _, slot in pairs(prof.Backpack.Slots) do
+                    if typeof(slot) == "table" and slot.ItemId then
+                        local q = tonumber(slot.Qty) or 0
+                        local id = tostring(slot.ItemId)
+                        local idLower = string.lower(id)
+                        if q > 0 and (id == "BaitChubby" or id == "BaitSpider" or string.find(idLower, "bait") or string.find(idLower, "chubby") or string.find(idLower, "spider")) then
+                            hasProfileBait = true
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+        if hasProfileBait then return true end
+
+        -- 2. ตรวจสอบจากช่อง SlotCards ในหน้าต่าง HUD
+        scanInventory()
+        if #DetectedBaits > 0 then
+            return true
+        end
+
+        -- 3. ตรวจสอบจาก Fishing HUD ของเกม
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        local csgoUi = pg and pg:FindFirstChild("CSGO_UI")
+        if csgoUi then
+            local fishingUi = csgoUi:FindFirstChild("Fishing", true)
+            if fishingUi and fishingUi.Visible then
+                local baitHold = fishingUi:FindFirstChild("BaitHold", true)
+                local qtyLab = baitHold and baitHold:FindFirstChild("Qty", true)
+                if qtyLab and qtyLab.Text ~= "ไม่มีเหยื่อ" and qtyLab.Text ~= "x0" and qtyLab.Text ~= "" then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    -- ฟังก์ชันตวัดเบ็ด
+    local function doReel()
+        if ActiveState.IsReeling then return end
+        ActiveState.IsReeling = true
+
+        if FishingRemotes.FishingReel and ActiveState.CastId then
+            local now = Workspace:GetServerTimeNow()
+            FishingRemotes.FishingReel:FireServer(ActiveState.CastId, now)
+            updateUIStatus("ตวัดเบ็ดแล้ว! รอผลลัพธ์...", Theme.Yellow)
+        end
+    end
+
+    -- ฟังก์ชันยกเลิกการตก
+    local function doCancel()
+        if FishingRemotes.FishingCancel and ActiveState.CastId then
+            FishingRemotes.FishingCancel:FireServer(ActiveState.CastId)
+        end
+        ActiveState.Phase = "idle"
+        ActiveState.CastId = nil
+        ActiveState.IsReeling = false
+        updateUIStatus("ยกเลิกการตกแล้ว (Canceled)", Theme.TextMuted)
+    end
+
+    local function getBackpackInfo()
+        local prof = getLatestProfile()
+        local weight = 0
+        local weightMax = 120
+        local bagSize = 20
+        local usedSlots = 0
+        local totalBagSlots = 20
+        local bagStart = (Inventory and Inventory.BAG_START) or 7
+
+        if prof and prof.Backpack then
+            local bp = prof.Backpack
+            weight = tonumber(bp.Weight) or 0
+            weightMax = tonumber(bp.WeightMax) or (Inventory and Inventory.DEFAULT_WEIGHT) or 120
+            bagSize = tonumber(bp.Size) or (Inventory and Inventory.DEFAULT_SIZE) or 26
+            totalBagSlots = math.max(1, bagSize - bagStart + 1)
+
+            if bp.Slots then
+                for i = bagStart, bagSize do
+                    local slot = bp.Slots[i]
+                    local isSlotEmpty = true
+                    if Inventory and Inventory.IsEmpty then
+                        isSlotEmpty = Inventory.IsEmpty(slot)
+                    else
+                        if slot and typeof(slot) == "table" and slot.ItemId and slot.ItemId ~= "" and (tonumber(slot.Qty) or 1) > 0 then
+                            isSlotEmpty = false
+                        end
+                    end
+                    if not isSlotEmpty then
+                        usedSlots = usedSlots + 1
+                    end
+                end
+            end
+        end
+
+        -- สำรอง: อ่านจาก UI ของตัวเกมหาก profile ยังไม่อัพเดท
+        if weight == 0 and weightMax <= 120 then
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local csgo = pg and pg:FindFirstChild("CSGO_UI")
+                if csgo then
+                    local weightLab = csgo:FindFirstChild("Weight", true)
+                    if weightLab and weightLab:IsA("TextLabel") and weightLab.Text ~= "" then
+                        local curW, maxW = string.match(weightLab.Text, "([%d%.]+)%s*/%s*([%d%.]+)")
+                        if curW and maxW then
+                            weight = tonumber(curW) or weight
+                            weightMax = tonumber(maxW) or weightMax
+                        end
+                    end
+                end
+            end)
+        end
+
+        local weightRatio = (weightMax > 0) and (weight / weightMax) or 0
+        local freeSlots = math.max(0, totalBagSlots - usedSlots)
+        return {
+            Weight = weight,
+            WeightMax = weightMax,
+            WeightRatio = weightRatio,
+            UsedSlots = usedSlots,
+            TotalSlots = totalBagSlots,
+            FreeSlots = freeSlots,
+        }
+    end
+
+    local function isBackpackFull()
+        local info = getBackpackInfo()
+        -- 1. เช็คน้ำหนัก: ถ้าน้ำหนักเกิน 98% หรือเหลือไม่ถึง 1.0 KG
+        if info.WeightMax > 0 then
+            if info.Weight >= (info.WeightMax - 1.0) or info.WeightRatio >= 0.98 then
+                return true, string.format("น้ำหนักเต็ม (%.1f/%.0f KG)", info.Weight, info.WeightMax)
+            end
+        end
+        -- 2. เช็คจำนวนช่อง: ถ้าช่องว่างเหลือ 0 ช่อง
+        if info.TotalSlots > 0 and info.FreeSlots <= 0 then
+            return true, string.format("ช่องกระเป๋าเต็ม (%d/%d ช่อง)", info.UsedSlots, info.TotalSlots)
+        end
+        return false, nil
+    end
+
+    updateBackpackUI = function()
+        if not (DepositStatusLabel and DepositStatusLabel.Parent) then return end
+        local info = getBackpackInfo()
+        if info.WeightMax > 0 then
+            local percent = math.floor(info.WeightRatio * 100)
+            local isFull = (info.WeightRatio >= 0.96 or info.FreeSlots <= 0)
+            DepositStatusLabel.Text = string.format("น้ำหนัก: %.1f/%.0f KG (%d%%)  |  ว่าง: %d/%d ช่อง", 
+                info.Weight, info.WeightMax, percent, info.FreeSlots, info.TotalSlots)
+            DepositStatusLabel.TextColor3 = isFull and Theme.Red or Theme.Yellow
+        else
+            DepositStatusLabel.Text = "กำลังอ่านข้อมูลกระเป๋า..."
+            DepositStatusLabel.TextColor3 = Theme.TextMuted
+        end
+    end
+
+    local function triggerStashAll()
+        local success = false
+        -- 1. ยิงผ่าน Remote โดยตรง (BagAllToStash)
+        if FishingRemotes.BagAllToStash then
+            pcall(function()
+                FishingRemotes.BagAllToStash:FireServer()
+                success = true
+            end)
+        end
+
+        -- 2. ค้นหาปุ่ม StashAll หรือปุ่มข้อความ "เก็บของในกระเป๋าเข้าคลังทั้งหมด" ใน PlayerGui เพื่อคลิก
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                for _, v in ipairs(pg:GetDescendants()) do
+                    if v:IsA("TextButton") or v:IsA("ImageButton") then
+                        if v.Name == "StashAll" or (v:IsA("TextButton") and string.find(v.Text, "เก็บของในกระเป๋าเข้าคลังทั้งหมด")) then
+                            if firesignal then
+                                firesignal(v.MouseButton1Click)
+                                firesignal(v.Activated)
+                            end
+                            success = true
+                        end
+                    end
+                end
+            end
+        end)
+
+        return success
+    end
+
+    performAutoDeposit = function()
+        if isDepositing or isRestocking then return end
+        if not (SavedStoragePos and SavedFishingPos) then
+            updateUIStatus("กระเป๋าเต็ม! แต่ยังไม่ได้บันทึกจุดคลังหรือจุดตกปลา", Theme.Red)
+            return
+        end
+
+        isDepositing = true
+        doCancel()
+        ActiveState.Phase = "idle"
+        unfreezePlayer()
+        updateUIStatus("กระเป๋าเต็ม! กำลังเดินไปคลัง (Noclip)...", Theme.Yellow)
+
+        -- 1. เดินไปจุดคลัง (Noclip ทำงานอัตโนมัติ)
+        local reachedStorage = walkToWait(SavedStoragePos, 50)
+        unfreezePlayer()
+        task.wait(1.0)
+
+        updateUIStatus("ถึงคลังแล้ว กำลังเก็บของเข้าคลังทั้งหมด...", Theme.Yellow)
+
+        -- ตรวจสอบ ProximityPrompt คลัง (ถ้ามี)
+        pcall(function()
+            if fireproximityprompt then
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    for _, prompt in ipairs(Workspace:GetDescendants()) do
+                        if prompt:IsA("ProximityPrompt") and prompt.Parent and prompt.Parent:IsA("BasePart") then
+                            if (hrp.Position - prompt.Parent.Position).Magnitude < 12 then
+                                fireproximityprompt(prompt)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        task.wait(0.5)
+
+        -- 2. กดปุ่มเก็บของทั้งหมดเข้าคลัง
+        triggerStashAll()
+        updateUIStatus("✓ เก็บของในกระเป๋าเข้าคลังทั้งหมดแล้ว!", Theme.Green)
+        task.wait(1.5)
+
+        -- ถ้าเหยื่อหมดด้วย และเปิด Auto Restock ไว้ ให้เบิกเหยื่อต่อเลย
+        if Settings.AutoRestock and not hasBaitAvailable() then
+            updateUIStatus("เหยื่อหมดด้วย! กำลังเบิกเหยื่อจากคลัง...", Theme.Yellow)
+            local amt = tonumber(Settings.RestockAmount) or 10
+            local whItem = findWarehouseBait(Settings.RestockBaitName)
+            if whItem and whItem.InvId and FishingRemotes.StashToBag then
+                local destSlot = findBestBackpackSlotForBait(whItem.ItemId)
+                FishingRemotes.StashToBag:FireServer(whItem.InvId, destSlot, amt)
+                updateUIStatus(string.format("เบิกเหยื่อสำเร็จ: %s x%d", tostring(whItem.ItemId), amt), Theme.Green)
+                task.wait(1.0)
+            end
+        end
+
+        fetchBaitCounts()
+        if updateBackpackUI then updateBackpackUI() end
+        unfreezePlayer()
+        task.wait(0.5)
+
+        updateUIStatus("เก็บของเสร็จแล้ว กำลังเดินกลับจุดตกปลา (Noclip)...", Theme.Yellow)
+
+        -- 3. เดินกลับจุดตกปลา (Noclip ทำงานอัตโนมัติ)
+        local reachedFishing = walkToWait(SavedFishingPos, 50)
+        unfreezePlayer()
+        task.wait(0.5)
+
+        -- หมุนตัวหันหน้าไปทางน้ำตามที่บันทึกไว้
+        if SavedFishingLook then
+            pcall(function()
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + Vector3.new(SavedFishingLook.X, 0, SavedFishingLook.Z))
+                end
+            end)
+        end
+
+        isDepositing = false
+        updateUIStatus("ถึงจุดตกปลาแล้ว เริ่มตกต่อ...", Theme.Green)
+
+        if Settings.AutoFishEnabled then
+            task.defer(function()
+                task.wait(1.0)
+                if Settings.AutoFishEnabled and not isDepositing and not isRestocking then
+                    nextAllowedCastTime = 0
+                    doCast(true)
+                end
+            end)
+        end
+    end
+
+    performAutoRestock = function()
+        if isRestocking or isDepositing then return end
+        if not (SavedStoragePos and SavedFishingPos) then
+            updateUIStatus("เหยื่อหมด! แต่ยังไม่ได้บันทึกจุดคลังหรือจุดตกปลา", Theme.Red)
+            return
+        end
+
+        isRestocking = true
+        doCancel()
+        ActiveState.Phase = "idle"
+        unfreezePlayer()
+        updateUIStatus("เหยื่อหมด! กำลังเดินไปคลัง (Noclip)...", Theme.Yellow)
+
+        -- 1. เดินไปจุดคลัง
+        local reachedStorage = walkToWait(SavedStoragePos, 50)
+        unfreezePlayer()
+        task.wait(1.0)
+
+        updateUIStatus("ถึงคลังแล้ว กำลังเบิกเหยื่อ...", Theme.Yellow)
+
+        -- 2. เบิกเหยื่อจาก Warehouse
+        local amt = tonumber(Settings.RestockAmount) or 10
+        local whItem = findWarehouseBait(Settings.RestockBaitName)
+
+        if whItem and whItem.InvId and FishingRemotes.StashToBag then
+            local destSlot = findBestBackpackSlotForBait(whItem.ItemId)
+            FishingRemotes.StashToBag:FireServer(whItem.InvId, destSlot, amt)
+            updateUIStatus(string.format("เบิกเหยื่อสำเร็จ: %s x%d", tostring(whItem.ItemId), amt), Theme.Green)
+        else
+            -- สำรอง: ค้นหาและกดปุ่มในหน้า UI คลัง
+            pcall(function()
+                local csgo = LocalPlayer.PlayerGui:FindFirstChild("CSGO_UI")
+                if csgo then
+                    local warehouse = csgo:FindFirstChild("Warehouse", true)
+                    if warehouse then
+                        for _, v in ipairs(warehouse:GetDescendants()) do
+                            if v:IsA("TextButton") or v:IsA("ImageButton") then
+                                local nameLab = v:FindFirstChild("ItemName", true) or v:FindFirstChild("Name", true)
+                                if nameLab and (string.find(string.lower(nameLab.Text), string.lower(Settings.RestockBaitName)) or string.find(nameLab.Text, "เหยื่อ")) then
+                                    if firesignal then
+                                        firesignal(v.MouseButton1Click)
+                                        firesignal(v.Activated)
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        task.wait(1.5)
+        fetchBaitCounts()
+        if updateBackpackUI then updateBackpackUI() end
+        unfreezePlayer()
+        task.wait(0.5)
+
+        updateUIStatus("เบิกเหยื่อเสร็จแล้ว กำลังเดินกลับจุดตกปลา (Noclip)...", Theme.Yellow)
+
+        -- 3. เดินกลับจุดตกปลา
+        local reachedFishing = walkToWait(SavedFishingPos, 50)
+        unfreezePlayer()
+        task.wait(0.5)
+
+        -- หมุนตัวหันหน้าไปทางน้ำตามที่บันทึกไว้
+        if SavedFishingLook then
+            pcall(function()
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + Vector3.new(SavedFishingLook.X, 0, SavedFishingLook.Z))
+                end
+            end)
+        end
+
+        isRestocking = false
+        updateUIStatus("ถึงจุดตกปลาแล้ว เริ่มตกต่อ...", Theme.Green)
+
+        if Settings.AutoFishEnabled then
+            task.defer(function()
+                task.wait(1.0)
+                if Settings.AutoFishEnabled and not isRestocking and not isDepositing then
+                    nextAllowedCastTime = 0
+                    doCast(true)
+                end
+            end)
+        end
+    end
+
+    -- ระบบนับถอยหลังและหน่วงเวลาการเหวี่ยงเบ็ดรอบถัดไป (Cast Delay Cooldown)
+    scheduleNextCast = function(customDelay, reason)
+        currentScheduleId = (currentScheduleId or 0) + 1
+        local thisScheduleId = currentScheduleId
+
+        local delaySec = tonumber(customDelay) or tonumber(Settings.CastDelay) or 2.0
+        delaySec = math.max(1.0, delaySec)
+        nextAllowedCastTime = os.clock() + delaySec
+        ActiveState.Phase = "cooldown"
+
+        task.spawn(function()
+            while os.clock() < nextAllowedCastTime do
+                if not Settings.AutoFishEnabled or isRestocking or isDepositing or ActiveState.Phase ~= "cooldown" or currentScheduleId ~= thisScheduleId then
+                    return
+                end
+                local remaining = math.max(0, nextAllowedCastTime - os.clock())
+                updateUIStatus(string.format("รอเหวี่ยงครั้งถัดไป: %.1f วินาที...", remaining), Theme.Yellow)
+                task.wait(0.2)
+            end
+
+            if Settings.AutoFishEnabled and not isRestocking and not isDepositing and ActiveState.Phase == "cooldown" and currentScheduleId == thisScheduleId then
+                ActiveState.Phase = "idle"
+                doCast()
+            end
+        end)
+    end
+
+    -- ฟังก์ชัน doCast ตกปลา
+    doCast = function(force)
+        if isRestocking or isDepositing then return false end
+
+        -- ป้องกันการเหวี่ยงก่อนครบเวลาหน่วง (Cooldown Guard)
+        if not force then
+            if os.clock() < nextAllowedCastTime then
+                return false
+            end
+            if ActiveState.Phase == "cast" or ActiveState.Phase == "reel" or ActiveState.Phase == "cooldown" then
+                return false
+            end
+        end
+
+        -- ป้องกันการส่ง request ถี่เกินไป (Debounce 0.8s)
+        if isCastingDebounce then return false end
+        isCastingDebounce = true
+        task.delay(0.8, function()
+            isCastingDebounce = false
+        end)
+
+        if not FishingRemotes.FishingStart then
+            updateUIStatus("ไม่พบ Remote: FishingStart!", Theme.Red)
+            return false
+        end
+
+        -- 1. ตรวจสอบกระเป๋าเต็มหรือไม่
+        if Settings.AutoDeposit and isBackpackFull() then
+            if SavedStoragePos and SavedFishingPos then
+                task.spawn(performAutoDeposit)
+                return false
+            else
+                updateUIStatus("กระเป๋าเต็ม! แต่ยังไม่ได้บันทึกจุดคลัง/จุดตกปลา", Theme.Red)
+                ActiveState.Phase = "idle"
+                return false
+            end
+        end
+
+        -- 2. ตรวจสอบเหยื่อว่าหมดหรือไม่
+        if not hasBaitAvailable() then
+            if Settings.AutoRestock then
+                if SavedStoragePos and SavedFishingPos then
+                    task.spawn(performAutoRestock)
+                    return false
+                else
+                    updateUIStatus("เหยื่อหมด! แต่ยังไม่ได้บันทึกจุดคลัง/จุดตกปลา", Theme.Red)
+                    ActiveState.Phase = "idle"
+                    return false
+                end
+            else
+                updateUIStatus("รอเหยื่อ... / เหยื่อหมด (Auto Restock ปิดอยู่)", Theme.Red)
+                ActiveState.Phase = "idle"
+                return false
+            end
+        end
+
+        local rodSlot  = getTargetRodSlot()
+        local baitSlot = getTargetBaitSlot()
+        local targetPos = getCastTargetPoint()
+
+        equipRodIfNeeded(rodSlot)
+
+        ActiveState.Phase = "cast"
+        ActiveState.CastTime = os.clock()
+        ActiveState.IsReeling = false
+
+        updateUIStatus("กำลังเหวี่ยงเบ็ด... (Casting)", Theme.Yellow)
+        FishingRemotes.FishingStart:FireServer(rodSlot, baitSlot, targetPos)
+        return true
+    end
+
+    local function handleReelPhase(state)
+        ActiveState.Phase      = "reel"
+        ActiveState.CastId     = state.castId
+        ActiveState.BiteAt     = state.biteAt or Workspace:GetServerTimeNow()
+        ActiveState.Speed      = state.speed or 1
+        ActiveState.ZoneCenter = state.zoneCenter or 0.5
+        ActiveState.ZoneWidth  = state.zoneWidth or 0.25
+        ActiveState.Deadline   = state.deadline or (ActiveState.BiteAt + 5)
+        ActiveState.IsReeling  = false
+
+        updateUIStatus("ปลากินแล้ว! กำลังตวัดเบ็ด...", Theme.Green)
+
+        task.spawn(function()
+            while ActiveState.Phase == "reel" and not ActiveState.IsReeling do
+                local now = Workspace:GetServerTimeNow()
+                if (ActiveState.Deadline - now) <= 0.2 then
+                    doReel()
+                    break
+                end
+
+                local curPos = markerAt(now, ActiveState.BiteAt, ActiveState.Speed)
+                local diff = math.abs(curPos - ActiveState.ZoneCenter)
+
+                if diff <= (ActiveState.ZoneWidth * 0.45) then
+                    doReel()
+                    break
+                end
+
+                RunService.Heartbeat:Wait()
+            end
+        end)
+    end
+
+    if FishingRemotes.FishingState then
+        FishingRemotes.FishingState.OnClientEvent:Connect(function(state)
+            if typeof(state) ~= "table" or not state.phase then return end
+
+            if state.phase == "cast" then
+                ActiveState.CastId = state.castId
+                ActiveState.Phase  = "cast"
+                updateUIStatus("เหวี่ยงเบ็ดแล้ว... รอปลากิน (Waiting for bite)", Theme.Yellow)
+
+            elseif state.phase == "reel" then
+                handleReelPhase(state)
+
+            elseif state.phase == "result" then
+                ActiveState.Phase = "result"
+                ActiveState.IsReeling = false
+
+                if state.ok then
+                    Stats.Catches = Stats.Catches + 1
+                    local itemName = "ปลา"
+                    if state.rewards and #state.rewards > 0 then
+                        local r = state.rewards[1]
+                        itemName = string.format("%s ×%d", tostring(r.name or r.itemId or "ปลา"), tonumber(r.qty) or 1)
+                    elseif state.name then
+                        itemName = string.format("%s ×%d", tostring(state.name or state.itemId or "ปลา"), tonumber(state.qty) or 1)
+                    end
+                    Stats.LastCatch = itemName
+                    updateUIStatus("✓ ตกสำเร็จ! ได้: " .. itemName, Theme.Green)
+                else
+                    Stats.Misses = Stats.Misses + 1
+                    local reason = tostring(state.message or "ปลาหลุด")
+                    updateUIStatus("✗ พลาด: " .. reason, Theme.Red)
+                end
+
+                fetchBaitCounts()
+                if updateBackpackUI then updateBackpackUI() end
+
+                -- ตรวจสอบกระเป๋าเต็มทันทีหลังตกปลา
+                if Settings.AutoDeposit and (isBackpackFull() or (not state.ok and state.message and (string.find(string.lower(tostring(state.message)), "เต็ม") or string.find(string.lower(tostring(state.message)), "กระเป๋า") or string.find(string.lower(tostring(state.message)), "น้ำหนัก") or string.find(string.lower(tostring(state.message)), "weight") or string.find(string.lower(tostring(state.message)), "full")))) then
+                    if SavedStoragePos and SavedFishingPos then
+                        ActiveState.Phase = "idle"
+                        task.spawn(performAutoDeposit)
+                        return
+                    else
+                        updateUIStatus("กระเป๋าเต็ม! แต่ยังไม่ได้บันทึกจุดคลัง/จุดตกปลา", Theme.Red)
+                    end
+                end
+
+                -- ตรวจสอบเหยื่อหมดทันทีหลังตกปลา
+                if not hasBaitAvailable() then
+                    if Settings.AutoRestock and SavedStoragePos and SavedFishingPos then
+                        ActiveState.Phase = "idle"
+                        task.spawn(performAutoRestock)
+                        return
+                    else
+                        updateUIStatus("เหยื่อหมด! (รอเติมเหยื่อ)", Theme.Red)
+                        ActiveState.Phase = "idle"
+                        return
+                    end
+                end
+
+                if Settings.AutoFishEnabled and not isRestocking and not isDepositing then
+                    scheduleNextCast(Settings.CastDelay, "result")
+                else
+                    ActiveState.Phase = "idle"
+                end
+
+            elseif state.phase == "cancel" then
+                ActiveState.CastId = nil
+                ActiveState.IsReeling = false
+                updateUIStatus("รอบตกปลาถูกยกเลิก", Theme.TextMuted)
+
+                if Settings.AutoFishEnabled and not isRestocking and not isDepositing then
+                    scheduleNextCast(Settings.CastDelay, "cancel")
+                else
+                    ActiveState.Phase = "idle"
+                end
+            end
+        end)
+    end
+
+    -- Loop ควบคุมการทำงานอัตโนมัติ (Supervisor Loop)
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if Settings.AutoFishEnabled and not isRestocking and not isDepositing then
+                -- 1. ถ้ากระเป๋าเต็ม ให้เริ่มขั้นตอนเดินไปเก็บของเข้าคลังทันที
+                if Settings.AutoDeposit and isBackpackFull() then
+                    if SavedStoragePos and SavedFishingPos then
+                        currentScheduleId = (currentScheduleId or 0) + 1
+                        doCancel()
+                        ActiveState.Phase = "idle"
+                        task.spawn(performAutoDeposit)
+                    else
+                        updateUIStatus("กระเป๋าเต็ม! (กรุณาบันทึกจุดคลังและเปิด Auto Deposit)", Theme.Red)
+                    end
+                -- 2. ถ้าเหยื่อหมด ให้เริ่มขั้นตอนเดินไปเบิกเหยื่อทันที
+                elseif not hasBaitAvailable() then
+                    if Settings.AutoRestock and SavedStoragePos and SavedFishingPos then
+                        currentScheduleId = (currentScheduleId or 0) + 1
+                        doCancel()
+                        ActiveState.Phase = "idle"
+                        task.spawn(performAutoRestock)
+                    else
+                        updateUIStatus("เหยื่อหมด! (กรุณาบันทึกจุดคลังและเปิด Auto Restock)", Theme.Red)
+                    end
+                -- 3. ถ้าอยู่ในสถานะ cooldown (กำลังนับถอยหลังรอเหวี่ยง) ห้ามแทรกแซงเด็ดขาด ปล่อยให้ scheduleNextCast ทำงาน
+                elseif ActiveState.Phase == "cooldown" then
+                    -- Cooldown active, do nothing
+                -- 4. ถ้าเหวี่ยงเบ็ดค้างนานเกิน 25 วินาที (เซิร์ฟเวอร์ค้างหรือปลาไม่กิน)
+                elseif ActiveState.Phase == "cast" then
+                    if (os.clock() - ActiveState.CastTime) > 25 then
+                        updateUIStatus("ระบบตรวจสอบ: รอปลานานเกินไป กำลังเหวี่ยงใหม่...", Theme.Yellow)
+                        doCancel()
+                        task.wait(1.5)
+                        if Settings.AutoFishEnabled and not isRestocking and not isDepositing then
+                            scheduleNextCast(2.0, "stuck_cast")
+                        end
+                    end
+                -- 5. ถ้าอยู่ในสถานะ idle นานเกินไป และหมดเวลารอแล้ว ให้เหวี่ยงเบ็ดต่อ
+                elseif ActiveState.Phase == "idle" then
+                    if os.clock() >= nextAllowedCastTime then
+                        task.wait(1)
+                        if Settings.AutoFishEnabled and not isRestocking and not isDepositing and ActiveState.Phase == "idle" and os.clock() >= nextAllowedCastTime then
+                            doCast()
+                        end
+                    end
+                -- 6. ถ้าค้างอยู่ที่สถานะ result นานเกิน 12 วินาที (ป้องกันหลุดสถานะ)
+                elseif ActiveState.Phase == "result" then
+                    if os.clock() >= nextAllowedCastTime then
+                        task.wait(1)
+                        if Settings.AutoFishEnabled and not isRestocking and not isDepositing and ActiveState.Phase == "result" then
+                            ActiveState.Phase = "idle"
+                            doCast()
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    local function setAutoFishing(enabled)
+        Settings.AutoFishEnabled = enabled
+        if enabled then
+            currentScheduleId = (currentScheduleId or 0) + 1
+            nextAllowedCastTime = 0
+            MainToggleBtn.Text = "🎣  เปิดตกปลา AUTO : เปิดใช้งาน (ON)"
+            MainToggleBtn.BackgroundColor3 = Theme.Green
+            MainToggleStroke.Color = Theme.Green
+            updateUIStatus("เริ่มระบบตกปลาอัตโนมัติ...", Theme.Green)
+            doCast(true)
+        else
+            currentScheduleId = (currentScheduleId or 0) + 1
+            MainToggleBtn.Text = "🎣  เปิดตกปลา AUTO : ปิด (OFF)"
+            MainToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+            MainToggleStroke.Color = Theme.Border
+            doCancel()
+            disableNoclip()
+            ActiveState.Phase = "idle"
+            updateUIStatus("ปิดระบบตกปลาแล้ว (Idle)", Theme.TextMuted)
+        end
+    end
+
+    MainToggleBtn.MouseButton1Click:Connect(function()
+        setAutoFishing(not Settings.AutoFishEnabled)
+    end)
+
+    ScanBtn.MouseButton1Click:Connect(function()
+        scanInventory()
+        updateUIStatus(string.format("สแกนเสร็จ: พบเบ็ด %d ชิ้น, เหยื่อ %d ชิ้น", #DetectedRods, #DetectedBaits), Theme.Green)
+    end)
+
+    CastNowBtn.MouseButton1Click:Connect(function()
+        currentScheduleId = (currentScheduleId or 0) + 1
+        nextAllowedCastTime = 0
+        ActiveState.Phase = "idle"
+        doCast(true)
+    end)
+
+    CancelBtn.MouseButton1Click:Connect(function()
+        currentScheduleId = (currentScheduleId or 0) + 1
+        doCancel()
+        disableNoclip()
+        ActiveState.Phase = "idle"
+        nextAllowedCastTime = os.clock() + 1.5
+    end)
+
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainWindow.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    Header.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            MainWindow.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    local function toggleMinimize()
+        isMinimized = not isMinimized
+        if isMinimized then
+            Tween(MainWindow, {Size = UDim2.new(0, 390, 0, 48)}, 0.2)
+            Body.Visible = false
+            MinBtn.Text = "+"
+        else
+            Body.Visible = true
+            Tween(MainWindow, {Size = UDim2.new(0, 390, 0, 520)}, 0.2)
+            MinBtn.Text = "-"
+        end
+    end
+
+    MinBtn.MouseButton1Click:Connect(toggleMinimize)
+    CloseBtn.MouseButton1Click:Connect(function()
+        ScreenGui.Enabled = false
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        if input.KeyCode == Enum.KeyCode.X then
+            if not ScreenGui.Enabled then
+                ScreenGui.Enabled = true
+            else
+                toggleMinimize()
+            end
+        end
+    end)
+
+    LocalPlayer.CharacterAdded:Connect(function()
+        disableNoclip()
+        isDepositing = false
+        isRestocking = false
+        unfreezePlayer()
+    end)
+
+    _G.UniqueFishingCleanup = function()
+        Settings.AutoFishEnabled = false
+        disableNoclip()
+        doCancel()
+        pcall(function()
+            if ScreenGui then ScreenGui:Destroy() end
+        end)
+        print("[Unique HUB] ล้างระบบ Auto Fishing เรียบร้อย")
+    end
+
+    scanInventory()
+    updateUIStatus("พร้อมใช้งาน (กด X ย่อ/ขยาย UI)", Theme.Green)
+end
+
+-- ══════════════════ INITIALIZATION & AUTO-LOGIN ══════════════════
+ScreenGui = Create("ScreenGui", {
+    Name = "UniqueFishing_GUI",
+    ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    DisplayOrder = 1000,
+    Parent = GuiParent,
+})
+
+-- ตรวจสอบคีย์ที่บันทึกไว้ในเครื่อง (Auto-Login)
+local saved = readKeyLocal()
+local autoLoginSuccess = false
+
+if saved and saved.key and saved.hwid and saved.hwid == getHWID() then
+    local ok, msg = verifyAndLockKeyOnline(saved.key)
+    if ok then
+        autoLoginSuccess = true
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "Unique HUB",
+                Text = "เข้าสู่ระบบอัตโนมัติสำเร็จ! ยินดีต้อนรับ",
+                Duration = 3
+            })
+        end)
+        launchAutoFishing()
+    end
+end
+
+-- หากไม่มีคีย์บันทึก หรือคีย์เก่าหมดอายุ ให้เปิดหน้าต่าง Key System
+if not autoLoginSuccess then
+    openKeySystemUI()
+end
+
+print("[Unique HUB] โหลดระบบ Unique HUB - Auto Fishing & Key System เรียบร้อย!")
+
+end)
+
+if not _initSuccess then
+    warn("[Unique HUB] เกิดข้อผิดพลาดขณะโหลด:", _initErr)
+end
